@@ -1,0 +1,6 @@
+v0.7.0 — April 2026
+- 800 new renders
+- 35 animations
+- 12,000 lines of dialogue
+- New chapter at the university
+- New love interest: Maya
