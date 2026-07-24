@@ -1,0 +1,91 @@
+[project]
+name = "vnmaster"
+version = "0.1.0"
+description = "Weekly Discord digest of Ren'Py VN updates with LLM-extracted changelog magnitude"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+keywords = ["renpy", "visual-novel", "discord", "f95checker"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Games/Entertainment",
+]
+dependencies = [
+    "anthropic>=0.40.0",
+    "click>=8.1.7",
+    "discord.py>=2.4.0",
+    "gdown>=6.0.0",
+    "gallery-dl>=1.32.7",
+    "httpx>=0.27.0",
+    "pydantic>=2.7.0",
+    "questionary>=2.1.1",
+    "rapidfuzz>=3.9.0",
+    "sqlalchemy>=2.0.30",
+    "alembic>=1.13.0",
+    "tomli>=2.0.1",
+    "tomli-w>=1.0.0",
+    "platformdirs>=4.2.0",
+    "beautifulsoup4>=4.12.0",
+    "brotli>=1.1.0",
+    "zstandard>=0.22.0",
+    "wordsegment>=1.3.0",
+    "requests>=2.32.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "bandit>=1.9.4",
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-mock>=3.14.0",
+    "hypothesis>=6.100.0",
+    "freezegun>=1.5.0",
+    "mypy>=1.10.0",
+    "pip-audit>=2.10.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+vnmaster = "vnmaster.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/zetas/VNMaster"
+Repository = "https://github.com/zetas/VNMaster"
+Issues = "https://github.com/zetas/VNMaster/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vnmaster"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.claude",
+    "/.superpowers",
+    "/docs/superpowers",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "live_llm: hits the Anthropic API; skipped unless VNMASTER_LIVE_LLM=1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

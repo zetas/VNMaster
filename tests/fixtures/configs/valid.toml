@@ -1,0 +1,35 @@
+[paths]
+games_root = "~/Games"
+renpy_saves_root = "~/Library/RenPy"
+f95checker_db = "~/Library/Application Support/F95Checker/db.sqlite3"
+vnmaster_db = "~/Library/Application Support/VNMaster/vnmaster.db"
+
+[discord]
+guild_id = "123456789"
+channel_id = "987654321"
+
+[anthropic]
+model = "claude-haiku-4-5"
+monthly_budget_usd = 5.0
+
+[schedule]
+cron = "0 9 * * SAT"
+
+[discovery]
+include_tags = ["corruption", "slow-burn"]
+exclude_tags = ["ntr"]
+max_suggestions_per_digest = 10
+skip_window_weeks = 4
+discovery_lookback_days = 7
+
+[matching]
+fuzzy_threshold = 90
+
+[magnitude_score]
+renders = 1.0
+animations = 5.0
+words_per_1k = 1.0
+scenes = 50.0
+new_locations = 20.0
+new_characters = 10.0
+bugfix_only_penalty = -100.0
