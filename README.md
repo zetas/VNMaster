@@ -218,6 +218,42 @@ authenticated redirect flow. If F95 conditionally requires a CAPTCHA, VNMaster
 opens that page in your browser and asks you to paste the resulting MEGA or
 PixelDrain URL back into the command.
 
+## Platform compatibility and contributing
+
+VNMaster currently supports **macOS as the host operating system**. References
+to Windows and Linux elsewhere in this README describe downloadable game builds,
+not operating systems on which the VNMaster CLI is fully supported.
+
+| Capability | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| Install and run the CLI | Supported | Untested | Untested |
+| `fetch` and `rebuild` | Supported | Core workflow is likely portable with manual configuration and tools | Ren'Py layouts are understood, but the host runtime needs portability work |
+| `vnmaster init` | Supported | Not supported | Not supported |
+| Scheduled digest and bot | launchd support | No systemd/cron integration | No Task Scheduler integration |
+| CI coverage | Tested on `macos-15` | Not tested | Not tested |
+
+The downloader, transactional staging, archive handling, and Ren'Py game
+directory detection are mostly platform-neutral. The current host-level
+limitations are:
+
+- macOS-specific defaults under `~/Library`, including F95Checker, save, log,
+  and VNMaster database locations;
+- unconditional use of macOS path defaults by CLI entry points;
+- launchd-only scheduler installation;
+- Unix-oriented `$HOME` and secret-file permission handling;
+- extractor discovery that has only been validated on macOS; and
+- a macOS-only GitHub Actions test environment.
+
+We are happy to accept pull requests that improve Linux or Windows support.
+Useful contributions include platform-aware default paths, portable credential
+permissions, automatic host-platform download priority, systemd/cron or Windows
+Task Scheduler integration, cross-platform extractor discovery, and Linux or
+Windows CI jobs. Please keep existing macOS behavior intact and include focused
+tests for each new platform path.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, testing, security, and pull
+request guidance.
+
 ## Tests
 
 ```bash
