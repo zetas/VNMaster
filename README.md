@@ -3,6 +3,20 @@
 Weekly Discord digest of F95Zone Ren'Py game updates with LLM-extracted
 changelog magnitude.
 
+## Table of contents
+
+- [Discord digest preview](#discord-digest-preview)
+- [Install (macOS)](#install-macos)
+- [First-run](#first-run)
+  - [Getting your F95Zone cookies](#getting-your-f95zone-cookies)
+- [Manual smoke test](#manual-smoke-test)
+- [Discord slash commands](#discord-slash-commands)
+- [Download and extract a game](#download-and-extract-a-game)
+- [Rebuild a downloaded game](#rebuild-a-downloaded-game)
+- [Platform compatibility and contributing](#platform-compatibility-and-contributing)
+- [Tests](#tests)
+- [License](#license)
+
 VNMaster is an independent, unofficial project. It is not affiliated with
 F95Zone, F95Checker, Ren'Py, Discord, or any game developer or download host.
 Only download and modify content you are legally authorized to use, and follow
