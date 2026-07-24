@@ -14,6 +14,14 @@ the terms of every forum and host you access.
 > and do not run software you do not trust. VNMaster validates archive paths
 > and size limits, but cannot establish publisher identity or code safety.
 
+## Discord digest preview
+
+VNMaster posts a kickoff notification followed by compact game embeds showing
+the installed and available versions, changes since the game was last played,
+estimated added playtime, match accuracy, and reaction-driven actions.
+
+![VNMaster Discord update showing a version comparison, changelog summary, estimated playtime, and action reactions](docs/images/discord-update-example.png)
+
 ## Install (macOS)
 
 ```bash
