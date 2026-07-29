@@ -70,6 +70,44 @@ def test_update_embed_uses_never_played_for_null_installed() -> None:
     assert "never played" in embed["title"].lower()
 
 
+def _title_for(installed: str | None, upstream: str | None) -> str:
+    sel = SelectedUpdate(
+        f95_thread_id=42, game_title="X", installed_version=installed,
+        latest_upstream_version=upstream, upstream_last_updated_at=None,
+        raw_changelog="", developer=None, image_url=None,
+        upstream_thread_url=None, last_played_at=None, install_path=None,
+        tags_json=None,
+    )
+    embed = build_update_embed(sel, deltas={}, magnitude_score=0.0, summary_one_line="")
+    return embed["title"]
+
+
+def test_title_does_not_double_the_v_prefix() -> None:
+    """F95Zone versions usually carry their own 'v' — don't add a second one."""
+    assert "vv23" not in _title_for(None, "v23")
+    assert "v23" in _title_for(None, "v23")
+    assert "vv" not in _title_for("v1.0", "v23")
+
+
+def test_title_leaves_chapter_and_season_versions_alone() -> None:
+    """Labelled versions ('Ch.4', 'S2 Ch.18') must not get a bogus 'v' glued on."""
+    for upstream in ["Ch.4", "Ep.11", "S2 Ch.18", "Week 3 v3.6.14", "Part 7 v0.108"]:
+        title = _title_for(None, upstream)
+        assert upstream in title, title
+        assert f"v{upstream}" not in title, title
+
+
+def test_title_adds_v_to_bare_numeric_versions() -> None:
+    """Save-file versions are usually bare numbers and still want the 'v'."""
+    title = _title_for("0.5.2", "0.7.0")
+    assert "v0.7.0" in title
+    assert "v0.5.2" in title
+
+
+def test_title_preserves_uppercase_v_prefix() -> None:
+    assert "vV1.0" not in _title_for("V1.0", "v2.0")
+
+
 def _field(embed: dict, name: str) -> str:
     return next(f for f in embed["fields"] if f["name"] == name)["value"]
 

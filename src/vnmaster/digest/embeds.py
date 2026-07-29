@@ -21,6 +21,21 @@ def _accuracy_value(confidence: str, basis: str) -> str:
     return f"{tier}\n{basis}" if basis else tier
 
 
+def _version_label(version: str | None) -> str:
+    """Render a version for display, adding "v" only when it's missing.
+
+    Version strings reach us verbatim from two sources that disagree about
+    prefixes. F95Zone thread titles usually carry their own ("v23", "v0.7.05")
+    or a chapter/season label instead ("Ch.4", "S2 Ch.18", "Ep.11"), while
+    Ren'Py save files hold a bare `config.version` ("0.5.2", "4.0"). Gluing a
+    "v" on unconditionally produced "vv23" and "vCh.4", so only bare numeric
+    versions get the prefix.
+    """
+    if not version:
+        return "?"
+    return f"v{version}" if version[0].isdigit() else version
+
+
 def build_update_embed(
     sel: SelectedUpdate,
     *,
@@ -31,12 +46,12 @@ def build_update_embed(
     accuracy_basis: str = "",
     no_delta_note: str = "",
 ) -> dict[str, Any]:
-    yours = sel.installed_version or "never played"
+    upstream = _version_label(sel.latest_upstream_version)
     title = (
-        f"{sel.game_title} — v{sel.latest_upstream_version or '?'} "
-        f"(yours: v{yours})"
+        f"{sel.game_title} — {upstream} "
+        f"(yours: {_version_label(sel.installed_version)})"
         if sel.installed_version
-        else f"{sel.game_title} — v{sel.latest_upstream_version or '?'} (never played)"
+        else f"{sel.game_title} — {upstream} (never played)"
     )
     # Developer, plus a standing status tag (Completed/Abandoned/On Hold).
     tag = status_label(sel.status)
