@@ -126,6 +126,23 @@ def test_save_dir_with_timestamp_suffix_matches_clean_f95_name() -> None:
     assert result.matches[0].save_dir_name == "ATouchofMagic-1691411418"
 
 
+def test_nested_save_dir_matches_on_its_last_path_segment() -> None:
+    """A path-valued config.save_directory ("Talothral/Sorcerer2") should match
+    on the leaf. Keeping the parent in the string scores 85.3 against
+    "Sorcerer 2" — barely over the threshold — while the leaf alone scores 94.7.
+    """
+    save = _save("Talothral/Sorcerer2")
+    f95 = _f95(287738, "Sorcerer 2")
+    result = match_library(
+        play_history=[save], installed=[], f95_rows=[f95],
+        cached_pairings={}, fuzzy_threshold=90,
+    )
+    assert len(result.matches) == 1
+    assert result.matches[0].f95_thread_id == 287738
+    # The full relative path stays the identity, so pairings remain unambiguous.
+    assert result.matches[0].save_dir_name == "Talothral/Sorcerer2"
+
+
 def test_save_dir_with_dev_suffix_matches_clean_f95_name() -> None:
     """Dev-added suffixes like 'Saves' / 'Week2' should also be stripped
     before fuzzy matching."""

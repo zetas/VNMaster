@@ -2,6 +2,12 @@
 
 Each subdirectory is treated as a played-game record, even if the game is no
 longer installed on disk.
+
+A game's `config.save_directory` can itself be a path ("Talothral/Sorcerer2"),
+so saves also turn up one level down. Those nested dirs are reported under their
+path relative to the root, which keeps them distinct from a same-named top-level
+dir. Ren'Py's own `sync/` mirror is skipped: it duplicates its parent's saves,
+and almost every save folder has one.
 """
 from __future__ import annotations
 
@@ -14,6 +20,9 @@ from vnmaster.scanners.types import PlayHistoryEntry
 
 log = get_logger(__name__)
 
+# Ren'Py's cloud-sync staging dir, a copy of the parent's saves.
+_MIRROR_DIRS = {"sync"}
+
 
 def scan_play_history(root: Path) -> list[PlayHistoryEntry]:
     if not root.exists() or not root.is_dir():
@@ -24,15 +33,34 @@ def scan_play_history(root: Path) -> list[PlayHistoryEntry]:
         if not child.is_dir():
             continue
         try:
-            entry = _entry_for(child)
+            out.append(_entry_for(child))
+            out.extend(_nested_entries(child))
         except PermissionError as e:
             log.warning("permission denied scanning %s: %s", child, e)
             continue
-        out.append(entry)
     return out
 
 
-def _entry_for(dirpath: Path) -> PlayHistoryEntry:
+def _nested_entries(parent: Path) -> list[PlayHistoryEntry]:
+    """Save dirs one level below a top-level folder.
+
+    Only dirs that actually hold saves count, so asset/persistent subfolders
+    stay out of the library.
+    """
+    out: list[PlayHistoryEntry] = []
+    for child in sorted(parent.iterdir()):
+        if not child.is_dir() or child.name in _MIRROR_DIRS:
+            continue
+        try:
+            if not any(child.glob("*.save")):
+                continue
+            out.append(_entry_for(child, name=f"{parent.name}/{child.name}"))
+        except PermissionError as e:
+            log.warning("permission denied scanning %s: %s", child, e)
+    return out
+
+
+def _entry_for(dirpath: Path, name: str | None = None) -> PlayHistoryEntry:
     save_files = list(dirpath.glob("*.save"))
     persistent = dirpath / "persistent"
 
@@ -59,7 +87,7 @@ def _entry_for(dirpath: Path) -> PlayHistoryEntry:
                 continue
 
     return PlayHistoryEntry(
-        save_dir_name=dirpath.name,
+        save_dir_name=name or dirpath.name,
         save_dir_path=dirpath,
         last_played_at=last_played,
         first_played_at=first_played,

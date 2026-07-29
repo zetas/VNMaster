@@ -4,6 +4,11 @@ A folder is a Ren'Py install if it contains:
   - renpy/ subdir
   - game/ subdir
   - a launcher: *.app, *.sh, or *.exe
+
+Games are not always direct children of the root — they're often grouped under
+a folder such as ~/Games/renpy-8.5.0/, so the walk descends a bounded number of
+levels. Once a folder is recognised as a game the walk stops there, since its
+own contents are assets rather than further games.
 """
 from __future__ import annotations
 
@@ -20,21 +25,33 @@ _CONFIG_VERSION_RE = re.compile(r'config\.version\s*=\s*"([^"]+)"')
 _SAVE_DIR_RE = re.compile(r'config\.save_directory\s*=\s*"([^"]+)"')
 
 
-def scan_disk(root: Path) -> list[InstalledGame]:
+def scan_disk(root: Path, max_depth: int = 2) -> list[InstalledGame]:
     if not root.exists() or not root.is_dir():
         return []
 
     out: list[InstalledGame] = []
-    for child in sorted(root.iterdir()):
+    _walk(root, out, depth=1, max_depth=max_depth)
+    return out
+
+
+def _walk(dirpath: Path, out: list[InstalledGame], depth: int, max_depth: int) -> None:
+    try:
+        children = sorted(dirpath.iterdir())
+    except (PermissionError, OSError) as e:
+        log.warning("could not list %s: %s", dirpath, e)
+        return
+
+    for child in children:
         if not child.is_dir():
             continue
-        if not _looks_like_renpy(child):
-            continue
-        try:
-            out.append(_game_for(child))
-        except (PermissionError, OSError) as e:
-            log.warning("could not scan %s: %s", child, e)
-    return out
+        if _looks_like_renpy(child):
+            try:
+                out.append(_game_for(child))
+            except (PermissionError, OSError) as e:
+                log.warning("could not scan %s: %s", child, e)
+            continue  # a game's innards are assets, not more games
+        if depth < max_depth:
+            _walk(child, out, depth + 1, max_depth)
 
 
 def _looks_like_renpy(dirpath: Path) -> bool:

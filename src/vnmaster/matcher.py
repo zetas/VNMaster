@@ -35,7 +35,12 @@ def _clean_for_match(name: str) -> str:
     Applied iteratively so chained suffixes like "Foo-Saves-100001" collapse
     cleanly. WRatio between cleaned save_dir_name and F95Checker game title
     is reliably high (≥90) when they're actually the same game.
+
+    A save dir may be a path when the game sets config.save_directory to one
+    ("Talothral/Sorcerer2"); only the leaf names the game, and keeping the
+    parent drags the score down.
     """
+    name = name.rsplit("/", 1)[-1]
     prev = ""
     while name != prev:
         prev = name

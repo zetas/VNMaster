@@ -101,3 +101,51 @@ def test_scan_total_size_sums_files(tmp_path: Path) -> None:
 def test_scan_handles_missing_root(tmp_path: Path) -> None:
     entries = scan_play_history(tmp_path / "does_not_exist")
     assert entries == []
+
+
+def test_scan_finds_nested_save_dir(tmp_path: Path) -> None:
+    """A game can set config.save_directory to a path ("Talothral/Sorcerer2"),
+    which lands its saves one level below the RenPy root."""
+    nested = tmp_path / "Talothral" / "Sorcerer2"
+    nested.mkdir(parents=True)
+    _write_renpy_save(nested / "1-1.save", version="0.4.0")
+
+    entries = {e.save_dir_name: e for e in scan_play_history(tmp_path)}
+    assert "Talothral/Sorcerer2" in entries
+    assert entries["Talothral/Sorcerer2"].save_count == 1
+    assert entries["Talothral/Sorcerer2"].last_played_version == "0.4.0"
+
+
+def test_scan_ignores_sync_mirror_dirs(tmp_path: Path) -> None:
+    """Ren'Py's cloud-sync dir mirrors the parent's saves — not a separate game.
+
+    Nearly every save folder has one, so treating them as games would roughly
+    double the library with duplicates.
+    """
+    game = tmp_path / "MyGame-1"
+    sync = game / "sync"
+    sync.mkdir(parents=True)
+    _write_renpy_save(game / "1-1.save", version="1.0")
+    _write_renpy_save(sync / "1-1.save", version="1.0")
+
+    names = {e.save_dir_name for e in scan_play_history(tmp_path)}
+    assert "MyGame-1" in names
+    assert "MyGame-1/sync" not in names
+    assert not any(n.endswith("sync") for n in names)
+
+
+def test_scan_skips_nested_dirs_without_saves(tmp_path: Path) -> None:
+    """Only surface a nested dir when it actually holds saves."""
+    (tmp_path / "Container" / "empty").mkdir(parents=True)
+    (tmp_path / "Container" / "images").mkdir(parents=True)
+    names = {e.save_dir_name for e in scan_play_history(tmp_path)}
+    assert "Container/empty" not in names
+    assert "Container/images" not in names
+
+
+def test_scan_does_not_recurse_below_one_level(tmp_path: Path) -> None:
+    deep = tmp_path / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+    _write_renpy_save(deep / "1-1.save", version="1.0")
+    names = {e.save_dir_name for e in scan_play_history(tmp_path)}
+    assert not any("b/c" in n for n in names)
