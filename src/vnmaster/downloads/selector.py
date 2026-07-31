@@ -4,9 +4,11 @@ from __future__ import annotations
 import re
 
 from vnmaster.downloads.models import (
+    DetectedPart,
     DownloadGroup,
     DownloadMirror,
     DownloadPlan,
+    PartDetection,
     PlannedArtifact,
     SkippedArtifact,
     ThreadInfo,
@@ -22,6 +24,24 @@ _ADDON_RE = re.compile(
 _REJECT_GAME_GROUP_RE = re.compile(r"android|compressed|update|patch|hotfix", re.I)
 _REJECT_ADDON_GROUP_RE = re.compile(r"android|compressed", re.I)
 _OPTIONAL_GROUP_RE = _ADDON_RE
+
+# Priority order for ties; aliases fold into one family.
+_PART_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("part", ("part", "pt")),
+    ("chapter", ("chapter", "ch")),
+    ("episode", ("episode", "ep")),
+    ("volume", ("volume", "vol")),
+    ("book", ("book",)),
+    ("act", ("act",)),
+    ("season", ("season",)),
+)
+_FAMILY_RES = {
+    family: re.compile(
+        r"\b(?:" + "|".join(aliases) + r")[\s.\-#]*(\d{1,3}(?:\s*-\s*\d{1,3})?)\b",
+        re.I,
+    )
+    for family, aliases in _PART_FAMILIES
+}
 
 
 class NoCompatibleDownloadError(RuntimeError):
@@ -46,6 +66,63 @@ def addon_matches_game(game: ThreadInfo, addon: ThreadInfo) -> tuple[bool, str]:
             f"reported add-on version {addon.version} may not match game {game.version}"
         )
     return True, ""
+
+
+def detect_parts(groups: tuple[DownloadGroup, ...]) -> PartDetection:
+    eligible = [
+        (index, group)
+        for index, group in enumerate(groups)
+        if not _REJECT_GAME_GROUP_RE.search(group.name)
+        and not _OPTIONAL_GROUP_RE.search(group.name)
+    ]
+    owned_by_family: dict[str, dict[int, list[int]]] = {}
+    ranged_by_family: dict[str, list[str]] = {}
+    for family, _aliases in _PART_FAMILIES:
+        owned: dict[int, list[int]] = {}
+        ranged: list[str] = []
+        for index, group in eligible:
+            found = _FAMILY_RES[family].findall(group.name)
+            if not found:
+                continue
+            if len(set(found)) > 1 or any("-" in value for value in found):
+                ranged.append(group.name)
+                continue
+            owned.setdefault(int(found[0]), []).append(index)
+        owned_by_family[family] = owned
+        ranged_by_family[family] = ranged
+
+    qualifying = [f for f, _ in _PART_FAMILIES if len(owned_by_family[f]) >= 2]
+    if not qualifying:
+        return PartDetection(family=None, parts=())
+    if len(qualifying) >= 2:
+        for _index, group in eligible:
+            hits = sum(
+                1 for f in qualifying if _FAMILY_RES[f].search(group.name)
+            )
+            if hits >= 2:
+                return PartDetection(
+                    family=None,
+                    parts=(),
+                    warnings=(
+                        "Download groups use composite numbering "
+                        f"({' and '.join(qualifying)}); treating this thread "
+                        "as a single game.",
+                    ),
+                )
+    family = max(qualifying, key=lambda f: len(owned_by_family[f]))
+    warnings = tuple(
+        f"Ignored group with a number range for parts: {name!r}"
+        for name in ranged_by_family[family]
+    )
+    parts = tuple(
+        DetectedPart(
+            number=number,
+            label=f"{family.capitalize()} {number}",
+            group_indexes=tuple(sorted(indexes)),
+        )
+        for number, indexes in sorted(owned_by_family[family].items())
+    )
+    return PartDetection(family=family, parts=parts, warnings=warnings)
 
 
 def build_download_plan(

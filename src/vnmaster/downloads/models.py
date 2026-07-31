@@ -19,6 +19,24 @@ class DownloadGroup:
 
 
 @dataclass(frozen=True)
+class DetectedPart:
+    number: int
+    label: str
+    group_indexes: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class PartDetection:
+    family: str | None
+    parts: tuple[DetectedPart, ...]
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def is_multipart(self) -> bool:
+        return len(self.parts) >= 2
+
+
+@dataclass(frozen=True)
 class ThreadInfo:
     thread_id: int
     title: str

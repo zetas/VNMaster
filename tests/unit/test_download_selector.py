@@ -7,6 +7,7 @@ from vnmaster.downloads.selector import (
     NoCompatibleDownloadError,
     addon_matches_game,
     build_download_plan,
+    detect_parts,
     is_requested_addon,
 )
 
@@ -290,3 +291,80 @@ def test_extras_attachment_is_an_optional_artifact() -> None:
     )
     assert plan.artifacts[1].title == "A Game — Game patch"
     assert plan.artifacts[1].host == "F95 ATTACHMENT"
+
+
+def test_detects_parts_from_numbered_groups() -> None:
+    groups = (
+        _group("Part 1 - Win"), _group("Part 1 - Mac"),
+        _group("Part 2 - Win"), _group("Part 2 - Mac"),
+    )
+    detection = detect_parts(groups)
+    assert detection.is_multipart
+    assert detection.family == "part"
+    assert [p.number for p in detection.parts] == [1, 2]
+    assert detection.parts[0].label == "Part 1"
+    assert detection.parts[0].group_indexes == (0, 1)
+
+
+def test_alias_pt_folds_into_part_family() -> None:
+    detection = detect_parts((_group("Pt. 1 Win"), _group("Pt. 2 Win")))
+    assert detection.family == "part"
+    assert detection.parts[1].label == "Part 2"
+
+
+def test_lone_season_number_is_not_multipart() -> None:
+    detection = detect_parts((_group("Season 2 - Win"), _group("Season 2 - Mac")))
+    assert not detection.is_multipart
+    assert detection.parts == ()
+
+
+def test_version_numbers_do_not_trigger_detection() -> None:
+    detection = detect_parts((_group("Win v1.2"), _group("Mac v1.2")))
+    assert not detection.is_multipart
+
+
+def test_update_groups_and_optional_groups_are_excluded() -> None:
+    groups = (
+        _group("Ch. 5 Update"),          # rejected by the update filter
+        _group("Part 2 walkthrough"),    # optional group, add-on material
+        _group("Part 1 - Win"), _group("Part 2 - Win"),
+    )
+    detection = detect_parts(groups)
+    assert detection.family == "part"
+    assert all(0 not in p.group_indexes and 1 not in p.group_indexes
+               for p in detection.parts)
+
+
+def test_family_with_more_numbers_wins() -> None:
+    groups = (
+        _group("Chapter 1"), _group("Chapter 2"), _group("Chapter 3"),
+        _group("Book 1"), _group("Book 2"),
+    )
+    assert detect_parts(groups).family == "chapter"
+
+
+def test_tie_breaks_by_priority_order() -> None:
+    groups = (
+        _group("Act 1"), _group("Act 2"),
+        _group("Episode 1"), _group("Episode 2"),
+    )
+    assert detect_parts(groups).family == "episode"
+
+
+def test_composite_numbering_falls_back_with_warning() -> None:
+    groups = (
+        _group("Season 1 Episode 1"), _group("Season 1 Episode 2"),
+        _group("Season 2 Episode 1"), _group("Season 2 Episode 2"),
+    )
+    detection = detect_parts(groups)
+    assert not detection.is_multipart
+    assert detection.warnings and "composite" in detection.warnings[0]
+
+
+def test_range_numbered_group_is_ignored_with_warning() -> None:
+    groups = (_group("Part 1"), _group("Part 2"), _group("Part 1-2 bundle"))
+    detection = detect_parts(groups)
+    assert detection.is_multipart
+    owned = {i for p in detection.parts for i in p.group_indexes}
+    assert 2 not in owned
+    assert any("Part 1-2 bundle" in w for w in detection.warnings)
