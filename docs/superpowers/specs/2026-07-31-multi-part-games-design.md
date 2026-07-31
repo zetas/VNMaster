@@ -40,9 +40,14 @@ thread metadata before any artifact selection.
 - A group joins a part only if it contains exactly one number of the chosen
   family. Groups with several ("Part 1-2 bundle") are ignored for parts, with
   a warning.
-- Game-eligible groups with no part token in a detected multi-part thread are
-  ignored for game selection (ambiguous). They stay eligible for the embedded
-  add-on pass.
+- Ownership of tokenless groups is positional. Many threads publish each part
+  as an empty heading group ("Part 6") followed by plain platform groups
+  ("Win/Linux", "Mac") that hold the actual links. A part heading captures the
+  mirror-bearing groups after it until any other heading ends the section: a
+  mirror-less group (an "Update Patch" heading, a "Part 1 - Part 6" divider, a
+  footnote) or any group carrying part tokens. Tokenless mirror groups outside
+  any part section are ignored for game selection; optional-pattern groups
+  stay with the embedded add-on pass.
 - If none of a part's groups match a configured platform (bare "Part 1"
   headings), the part's groups are treated as platform-neutral and remain
   eligible with `platform=None`, like add-on groups today.

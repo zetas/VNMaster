@@ -114,15 +114,58 @@ def detect_parts(groups: tuple[DownloadGroup, ...]) -> PartDetection:
         f"Ignored group with a number range for parts: {name!r}"
         for name in ranged_by_family[family]
     )
+    owned = {
+        number: list(indexes) for number, indexes in owned_by_family[family].items()
+    }
+    _attach_section_groups(groups, family, owned)
     parts = tuple(
         DetectedPart(
             number=number,
             label=f"{family.capitalize()} {number}",
             group_indexes=tuple(sorted(indexes)),
         )
-        for number, indexes in sorted(owned_by_family[family].items())
+        for number, indexes in sorted(owned.items())
     )
     return PartDetection(family=family, parts=parts, warnings=warnings)
+
+
+def _attach_section_groups(
+    groups: tuple[DownloadGroup, ...],
+    family: str,
+    owned: dict[int, list[int]],
+) -> None:
+    """Attach mirror-bearing groups to the part heading they sit under.
+
+    Many threads publish each part as an empty heading group ("Part 6")
+    followed by plain platform groups ("Win/Linux", "Mac") that hold the
+    actual links. Ownership is positional: a part heading captures the
+    mirror groups after it until any other heading (a mirror-less group,
+    or any group carrying part tokens) ends the section.
+    """
+    anchored = {index for indexes in owned.values() for index in indexes}
+    pattern = _FAMILY_RES[family]
+    current: int | None = None
+    for index, group in enumerate(groups):
+        found = pattern.findall(group.name)
+        if index in anchored:
+            current = int(found[0])
+            continue
+        if found:
+            # A tokened group that is not an anchor (range divider, filtered
+            # variant) ends the section rather than inheriting it.
+            current = None
+            continue
+        if not group.mirrors:
+            # A mirror-less group is a heading of some other section, e.g.
+            # "Update Patch (v0.107>v0.108)" or a footnote.
+            current = None
+            continue
+        if _OPTIONAL_GROUP_RE.search(group.name):
+            continue
+        if _REJECT_GAME_GROUP_RE.search(group.name):
+            continue
+        if current is not None:
+            owned[current].append(index)
 
 
 def parse_parts_option(raw: str, available: tuple[int, ...]) -> tuple[int, ...]:

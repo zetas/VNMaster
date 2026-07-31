@@ -472,3 +472,63 @@ def test_single_part_threads_are_unchanged() -> None:
     )
     assert baseline == with_detection
     assert baseline.artifacts[0].part is None
+
+
+def _heading(name: str) -> DownloadGroup:
+    return DownloadGroup(name, ())
+
+
+def test_detects_parts_from_empty_heading_sections() -> None:
+    # Grandma's House layout: each part is an empty heading group followed by
+    # plain platform groups that carry the actual mirrors.
+    groups = (
+        _heading("Part 2"),
+        _group("Win/Linux"),
+        _group("Mac"),
+        _heading("Part 1"),
+        _group("Win/Linux"),
+        _group("Mac"),
+    )
+    detection = detect_parts(groups)
+    assert detection.is_multipart
+    part1 = next(p for p in detection.parts if p.number == 1)
+    part2 = next(p for p in detection.parts if p.number == 2)
+    assert part1.group_indexes == (3, 4, 5)
+    assert part2.group_indexes == (0, 1, 2)
+
+
+def test_non_part_heading_breaks_section_ownership() -> None:
+    groups = (
+        _heading("Part 2"),
+        _group("Win/Linux"),
+        _heading("Update Patch (v0.107>v0.108)"),
+        _group("Win/Linux"),
+        _heading("Part 1 - Part 2"),
+        _heading("Part 1"),
+        _group("Win/Linux"),
+    )
+    detection = detect_parts(groups)
+    part2 = next(p for p in detection.parts if p.number == 2)
+    part1 = next(p for p in detection.parts if p.number == 1)
+    assert part2.group_indexes == (0, 1)
+    assert part1.group_indexes == (5, 6)
+
+
+def test_heading_section_thread_plans_downloadable_parts() -> None:
+    game = _thread(9, "Grandma's House", "Part 2 v0.9", (
+        _heading("Part 2"),
+        _group("Win/Linux"),
+        _group("Mac"),
+        _heading("Part 1"),
+        _group("Win/Linux"),
+        _group("Mac"),
+    ))
+    detection = detect_parts(game.downloads)
+    plan = build_download_plan(
+        game, [], platform_priority=["mac", "windows"], preferred_hosts=["mega"],
+        detection=detection, selected_parts=(1, 2),
+    )
+    games = [a for a in plan.artifacts if a.kind == "game"]
+    assert [a.part for a in games] == ["Part 1", "Part 2"]
+    assert all(a.platform == "mac" for a in games)
+    assert all(a.locator for a in games)
