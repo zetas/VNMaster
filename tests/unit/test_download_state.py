@@ -182,6 +182,31 @@ def test_part_save_merges_and_keeps_sibling_parts(engine, tmp_path: Path) -> Non
     assert any(key.startswith("Part 2/") for key in state.archive_hashes)
 
 
+def test_part_save_does_not_clobber_a_double_digit_sibling(engine, tmp_path: Path) -> None:
+    # "Part 1" is a string-prefix of "Part 10"; the merge filters keys by
+    # "{prefix}/" and lines by "{part}: " specifically so re-saving Part 1
+    # can't accidentally match and drop Part 10's entries.
+    root = tmp_path / "Split Game" / "v2.0"
+    save_install_state(
+        engine, _fake_result(final_dir=root / "Part 1", part="Part 1"),
+        part="Part 1", install_root=root,
+    )
+    save_install_state(
+        engine, _fake_result(final_dir=root / "Part 10", part="Part 10"),
+        part="Part 10", install_root=root,
+    )
+
+    state = save_install_state(
+        engine, _fake_result(final_dir=root / "Part 1", part="Part 1"),
+        part="Part 1", install_root=root,
+    )
+
+    part_ten_artifacts = [entry for entry in state.artifacts if entry.get("part") == "Part 10"]
+    assert len(part_ten_artifacts) == 1
+    assert any(key.startswith("Part 10/") for key in state.archive_hashes)
+    assert any(line.startswith("Part 10: ") for line in state.verification_checks)
+
+
 def test_legacy_save_is_unchanged(engine, tmp_path: Path) -> None:
     result = _fake_result(final_dir=tmp_path / "G" / "v1")
 
