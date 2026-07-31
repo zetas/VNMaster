@@ -99,3 +99,93 @@ def test_mark_rebuilt_updates_state(tmp_path: Path) -> None:
     assert rebuilt.last_rebuilt_at is not None
     assert rebuilt.verification_checks == ("rebuilt",)
     assert list_install_states(engine) == (rebuilt,)
+
+
+@pytest.fixture
+def engine(tmp_path: Path):
+    eng = create_engine_for(tmp_path / "vnmaster.db")
+    ensure_schema(eng)
+    return eng
+
+
+def _fake_result(
+    final_dir: Path, *, part: str | None = None, version: str = "v1"
+) -> DownloadExecutionResult:
+    archive = final_dir / "archive" / "game.zip"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_bytes(b"archive")
+    artifact = PlannedArtifact(
+        kind="game",
+        title="Split Game",
+        version=version,
+        thread_id=42,
+        thread_url="https://f95zone.to/threads/42",
+        group_name="Win/Linux",
+        platform="windows",
+        host="GOFILE",
+        locator="https://gofile.io/d/example",
+        part=part,
+    )
+    execution = ArtifactExecution(
+        artifact=artifact,
+        download=ResolvedDownload(
+            "GOFILE",
+            artifact.locator,
+            "https://gofile.io/d/example",
+            platform="windows",
+            group_name="Win/Linux",
+        ),
+        output_path=Path("game"),
+        archive_paths=(Path("archive/game.zip"),),
+    )
+    return DownloadExecutionResult(
+        final_dir=final_dir,
+        artifacts=(execution,),
+        verification_checks=("game present",),
+        renpy_game_dir=None,
+        urm_path=None,
+    )
+
+
+def test_part_save_prefixes_paths_and_records_part(engine, tmp_path: Path) -> None:
+    root = tmp_path / "Split Game" / "v2.0"
+    result = _fake_result(final_dir=root / "Part 1", part="Part 1")
+
+    state = save_install_state(engine, result, part="Part 1", install_root=root)
+
+    assert state.install_path == root
+    entry = state.artifacts[0]
+    assert entry["part"] == "Part 1"
+    assert entry["archive_paths"][0].startswith("Part 1/")
+    assert all(key.startswith("Part 1/") for key in state.archive_hashes)
+    assert all(line.startswith("Part 1: ") for line in state.verification_checks)
+
+
+def test_part_save_merges_and_keeps_sibling_parts(engine, tmp_path: Path) -> None:
+    root = tmp_path / "Split Game" / "v2.0"
+    save_install_state(
+        engine, _fake_result(final_dir=root / "Part 1", part="Part 1"),
+        part="Part 1", install_root=root,
+    )
+    save_install_state(
+        engine, _fake_result(final_dir=root / "Part 2", part="Part 2"),
+        part="Part 2", install_root=root,
+    )
+
+    state = save_install_state(
+        engine, _fake_result(final_dir=root / "Part 1", part="Part 1"),
+        part="Part 1", install_root=root,
+    )
+
+    parts = sorted({entry.get("part") for entry in state.artifacts})
+    assert parts == ["Part 1", "Part 2"]
+    assert any(key.startswith("Part 2/") for key in state.archive_hashes)
+
+
+def test_legacy_save_is_unchanged(engine, tmp_path: Path) -> None:
+    result = _fake_result(final_dir=tmp_path / "G" / "v1")
+
+    state = save_install_state(engine, result)
+
+    assert "part" not in state.artifacts[0] or state.artifacts[0]["part"] is None
+    assert not any(key.startswith("/") for key in state.archive_hashes)

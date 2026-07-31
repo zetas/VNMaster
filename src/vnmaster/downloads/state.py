@@ -59,27 +59,59 @@ def save_install_state(
     engine: Engine,
     result: DownloadExecutionResult,
     *,
+    part: str | None = None,
+    install_root: Path | None = None,
     reporter: Callable[[str], None] = lambda _message: None,
 ) -> InstallState:
-    """Hash preserved payloads and upsert one completed installation."""
+    """Hash preserved payloads and upsert one completed installation.
+
+    A legacy call (no `part`) keeps today's behavior: the row is keyed by
+    `result.final_dir` and fully replaced on every save.
+
+    A part call merges into the row for `install_root` (the version root
+    shared by every part). Relative paths in artifact payloads and hash
+    keys are prefixed with the part's directory name, verification lines
+    are prefixed with the part label, and only this part's entries are
+    replaced; other parts' entries are kept.
+    """
     if not result.artifacts:
         raise InstallStateError("Download result has no artifacts")
+    if part is not None and install_root is None:
+        raise InstallStateError("Part saves require the version root path")
     game_execution = result.artifacts[0]
     game = game_execution.artifact
+    prefix = result.final_dir.name if part is not None else None
+
+    def _rel(path: Path | str) -> str:
+        return f"{prefix}/{path}" if prefix else str(path)
+
     archive_hashes: dict[str, str] = {}
     for execution in result.artifacts:
         for relative in execution.archive_paths:
-            reporter(f"Hashing preserved payload: {relative}")
-            archive_hashes[str(relative)] = hash_payload(result.final_dir / relative)
+            reporter(f"Hashing preserved payload: {_rel(relative)}")
+            archive_hashes[_rel(relative)] = hash_payload(result.final_dir / relative)
 
-    artifacts = tuple(_artifact_payload(execution) for execution in result.artifacts)
+    artifacts: list[dict[str, object]] = []
+    for execution in result.artifacts:
+        payload = _artifact_payload(execution)
+        if part is not None:
+            payload["part"] = part
+        payload["output_path"] = _rel(execution.output_path)
+        payload["archive_paths"] = [_rel(path) for path in execution.archive_paths]
+        artifacts.append(payload)
+
+    verification = tuple(
+        f"{part}: {check}" if part is not None else check
+        for check in result.verification_checks
+    )
+    install_path = str(install_root if install_root is not None else result.final_dir)
     now = int(time.time())
-    install_path = str(result.final_dir)
     with session_scope(engine) as session:
         row = session.execute(
             select(GameInstall).where(GameInstall.install_path == install_path)
         ).scalar_one_or_none()
-        if row is None:
+        created = row is None
+        if created:
             row = GameInstall(
                 f95_thread_id=game.thread_id,
                 game_title=game.title,
@@ -96,6 +128,26 @@ def save_install_state(
                 updated_at=now,
             )
             session.add(row)
+        assert row is not None
+        if part is not None and not created:
+            kept_artifacts = [
+                entry
+                for entry in json.loads(row.artifacts_json or "[]")
+                if entry.get("part") != part
+            ]
+            artifacts = kept_artifacts + artifacts
+            kept_hashes = {
+                key: value
+                for key, value in json.loads(row.archive_hashes_json or "{}").items()
+                if not key.startswith(f"{prefix}/")
+            }
+            archive_hashes = {**kept_hashes, **archive_hashes}
+            kept_checks = [
+                line
+                for line in json.loads(row.verification_json or "[]")
+                if not line.startswith(f"{part}: ")
+            ]
+            verification = tuple(kept_checks) + verification
         row.f95_thread_id = game.thread_id
         row.game_title = game.title
         row.version = game.version
@@ -105,11 +157,12 @@ def save_install_state(
         row.source_locator = game_execution.download.locator
         row.artifacts_json = json.dumps(artifacts, ensure_ascii=False)
         row.archive_hashes_json = json.dumps(archive_hashes, ensure_ascii=False)
-        row.verification_json = json.dumps(result.verification_checks, ensure_ascii=False)
-        row.renpy_game_dir = (
-            str(result.renpy_game_dir) if result.renpy_game_dir is not None else None
-        )
-        row.urm_path = str(result.urm_path) if result.urm_path is not None else None
+        row.verification_json = json.dumps(list(verification), ensure_ascii=False)
+        if created or part is None:
+            row.renpy_game_dir = (
+                _rel(result.renpy_game_dir) if result.renpy_game_dir is not None else None
+            )
+            row.urm_path = _rel(result.urm_path) if result.urm_path is not None else None
         row.updated_at = now
         session.flush()
         state = _to_state(row)
