@@ -94,6 +94,9 @@ def _part_sort_key(label: str) -> tuple[str, int]:
 
 def _scoped_state(state: InstallState, label: str) -> InstallState:
     """Build the state for a single part, with its prefix stripped."""
+    # Relies on part labels ("Part 3") being filesystem-safe and equal to
+    # _safe_component(label), so the label doubles as the dirname prefix
+    # stripped from every recorded path below.
     prefix = f"{label}/"
     artifacts: list[dict[str, object]] = []
     for entry in state.artifacts:
