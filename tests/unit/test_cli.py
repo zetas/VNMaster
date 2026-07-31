@@ -10,11 +10,18 @@ from vnmaster.cli import (
     _parse_optional_selection,
     _prompt_game_resolution,
     _prompt_optional_selection_menu,
+    _resolve_part_selection,
     main,
 )
 from vnmaster.db.engine import create_engine_for, session_scope
 from vnmaster.db.models import Base, Pairing
-from vnmaster.downloads.models import DownloadPlan, PlannedArtifact, ThreadInfo
+from vnmaster.downloads.models import (
+    DetectedPart,
+    DownloadPlan,
+    PartDetection,
+    PlannedArtifact,
+    ThreadInfo,
+)
 from vnmaster.f95_search import F95SearchHit
 
 
@@ -329,3 +336,35 @@ def test_unpair_subcommand_missing_exits_nonzero(tmp_path: Path, monkeypatch) ->
     result = runner.invoke(main, ["unpair", "ghost", "--config", str(config_file)])
     assert result.exit_code != 0
     assert "No pairing found for" in result.output
+
+
+def _detection() -> PartDetection:
+    return PartDetection(
+        family="part",
+        parts=(
+            DetectedPart(1, "Part 1", (0,)),
+            DetectedPart(2, "Part 2", (1,)),
+        ),
+    )
+
+
+def test_parts_flag_is_parsed() -> None:
+    assert _resolve_part_selection(
+        _detection(), "all", assume_yes=True, installed={}
+    ) == (1, 2)
+
+
+def test_yes_without_parts_is_an_error() -> None:
+    import click
+    import pytest
+
+    with pytest.raises(click.UsageError):
+        _resolve_part_selection(_detection(), None, assume_yes=True, installed={})
+
+
+def test_bad_parts_value_is_a_usage_error() -> None:
+    import click
+    import pytest
+
+    with pytest.raises(click.UsageError):
+        _resolve_part_selection(_detection(), "9", assume_yes=True, installed={})

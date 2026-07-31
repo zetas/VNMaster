@@ -12,7 +12,8 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine
 
     from vnmaster.config import Config
-    from vnmaster.downloads.models import DownloadPlan, PlannedArtifact
+    from vnmaster.downloads.models import DownloadPlan, PartDetection, PlannedArtifact
+    from vnmaster.downloads.service import DownloadExecutionResult
     from vnmaster.f95_search import F95SearchHit
     from vnmaster.paths import VNMasterPaths
 
@@ -589,6 +590,10 @@ def debug_search(query: str, config_path: Path | None, save_path: Path | None) -
     help="Download only the full game build.",
 )
 @click.option(
+    "--parts", "parts_option", type=str, default=None,
+    help="For multi-part threads: parts to download, e.g. '1,3-5' or 'all'.",
+)
+@click.option(
     "--host", "preferred_host",
     type=str,
     default=None,
@@ -611,6 +616,7 @@ def fetch(
     dry_run: bool,
     assume_yes: bool,
     no_addons: bool,
+    parts_option: str | None,
     preferred_host: str | None,
     download_urls: tuple[str, ...],
     force_incompatible_addons: bool,
@@ -631,7 +637,8 @@ def fetch(
     from vnmaster.downloads.service import execute_download_plan_detailed
     from vnmaster.downloads.state import save_install_state
     from vnmaster.downloads.workflow import (
-        prepare_download_plan,
+        build_plan_from_discovery,
+        discover_thread,
         select_optional_artifacts,
     )
     from vnmaster.f95_search import build_search_client
@@ -644,39 +651,70 @@ def fetch(
         with build_search_client(cookie_header=secrets.f95zone_cookies) as client:
             plan_input = game
             try:
-                candidate_plan = prepare_download_plan(
-                    plan_input,
-                    client=client,
-                    platform_priority=cfg.downloads.platform_priority,
-                    preferred_hosts=(
-                        [preferred_host]
-                        if preferred_host
-                        else cfg.downloads.preferred_hosts
-                    ),
-                    include_addons=not no_addons,
-                    allow_host_fallback=True,
+                discovery = discover_thread(
+                    plan_input, client=client, include_addons=not no_addons
                 )
             except AmbiguousGameError as exc:
                 selected_hit = _prompt_game_resolution(exc.hits)
                 plan_input = str(selected_hit.thread_id)
-                candidate_plan = prepare_download_plan(
-                    plan_input,
-                    client=client,
-                    platform_priority=cfg.downloads.platform_priority,
-                    preferred_hosts=(
-                        [preferred_host]
-                        if preferred_host
-                        else cfg.downloads.preferred_hosts
-                    ),
-                    include_addons=not no_addons,
-                    allow_host_fallback=True,
+                discovery = discover_thread(
+                    plan_input, client=client, include_addons=not no_addons
                 )
+
+            from vnmaster.downloads.selector import detect_parts
+
+            detection = detect_parts(discovery.game.downloads)
+            for warning in detection.warnings:
+                click.echo(f"Note: {warning}")
+            if any(
+                group.name == "Thread download links"
+                for group in discovery.game.downloads
+            ):
+                # The HTML fallback scraper collapses the OP into one flat
+                # link list, so part headings are already gone.
+                click.echo(
+                    "Note: this thread's links were hand-scraped; multi-part "
+                    "detection is unavailable."
+                )
+            selected_parts: tuple[int, ...] | None = None
+            if detection.is_multipart:
+                if dry_run and parts_option is None:
+                    click.echo("Detected a multi-part thread:")
+                    for part in detection.parts:
+                        click.echo(f"  {part.number}. {part.label}")
+                    click.echo("Re-run with --parts to plan specific parts.")
+                    return
+                selected_parts = _resolve_part_selection(
+                    detection,
+                    parts_option,
+                    assume_yes=assume_yes,
+                    installed=_installed_part_versions(
+                        engine, discovery.game.thread_id
+                    ),
+                )
+            elif parts_option is not None:
+                raise click.UsageError(
+                    "--parts was given but this thread has no detected parts."
+                )
+            candidate_plan = build_plan_from_discovery(
+                discovery,
+                platform_priority=cfg.downloads.platform_priority,
+                preferred_hosts=(
+                    [preferred_host]
+                    if preferred_host
+                    else cfg.downloads.preferred_hosts
+                ),
+                detection=detection if detection.is_multipart else None,
+                selected_parts=selected_parts,
+            )
             _print_download_candidates(candidate_plan, destination)
             if dry_run:
                 return
 
             plan = candidate_plan
-            optional_artifacts = candidate_plan.artifacts[1:]
+            optional_artifacts = tuple(
+                a for a in candidate_plan.artifacts if a.kind == "addon"
+            )
             if optional_artifacts:
                 selected_numbers = _prompt_optional_selection(optional_artifacts)
                 plan = select_optional_artifacts(candidate_plan, selected_numbers)
@@ -807,6 +845,43 @@ def fetch(
                         f"No mirrors for {artifact.title!r} could be resolved."
                     )
                 resolved_downloads.append(tuple(candidates))
+
+        multipart = any(a.kind == "game" and a.part for a in plan.artifacts)
+        if multipart:
+            from vnmaster.downloads.service import execute_multipart_plan
+
+            saved_ids: list[int] = []
+
+            def _record(part: str, part_result: DownloadExecutionResult) -> None:
+                state = save_install_state(
+                    engine, part_result,
+                    part=part, install_root=part_result.final_dir.parent,
+                    reporter=click.echo,
+                )
+                saved_ids.append(state.id)
+
+            result = execute_multipart_plan(
+                plan,
+                resolved_downloads=resolved_downloads,
+                destination_root=destination.expanduser(),
+                urm_mods_dir=cfg.paths.games_root / "Mods",
+                reporter=click.echo,
+                on_part_complete=_record,
+            )
+            for part_result in result.completed:
+                click.echo(f"Ready: {part_result.final_dir}")
+            if result.failures:
+                failed = ", ".join(
+                    f"{f.part} ({f.error})" for f in result.failures
+                )
+                done = ", ".join(
+                    r.final_dir.name for r in result.completed
+                ) or "none"
+                raise click.ClickException(
+                    f"Some parts failed: {failed}. Completed: {done}."
+                )
+            click.echo(f"Recorded install state: #{saved_ids[-1]}")
+            return
 
         execution = execute_download_plan_detailed(
             plan,
@@ -950,8 +1025,9 @@ def _print_artifact(artifact: PlannedArtifact, *, prefix: str) -> None:
     action = ""
     if artifact.kind == "addon":
         action = " · installs into game" if should_install_addon(artifact) else " · kept separate"
+    part = f" [{artifact.part}]" if artifact.part else ""
     click.echo(
-        f"{prefix}{artifact.kind}: {artifact.title} "
+        f"{prefix}{artifact.kind}: {artifact.title}{part} "
         f"[{artifact.group_name} · {artifact.host}{fallbacks}{platform}{version}"
         f"{action}]"
     )
@@ -1118,3 +1194,100 @@ def _parse_optional_selection(raw: str, optional_count: int) -> tuple[int, ...]:
     if invalid:
         raise ValueError(f"number {invalid[0]} is outside 1-{optional_count}")
     return tuple(sorted(selected))
+
+
+def _resolve_part_selection(
+    detection: PartDetection,
+    parts_option: str | None,
+    *,
+    assume_yes: bool,
+    installed: dict[int, str],
+) -> tuple[int, ...]:
+    from vnmaster.downloads.selector import parse_parts_option
+
+    available = tuple(part.number for part in detection.parts)
+    if parts_option is not None:
+        try:
+            return parse_parts_option(parts_option, available)
+        except ValueError as exc:
+            raise click.UsageError(str(exc)) from exc
+    if assume_yes:
+        raise click.UsageError(
+            "This thread has multiple parts; pass --parts (e.g. --parts 1,3-5 "
+            "or --parts all) when using --yes."
+        )
+    return _prompt_part_selection(detection, installed)
+
+
+def _prompt_part_selection(
+    detection: PartDetection, installed: dict[int, str]
+) -> tuple[int, ...]:
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        return _prompt_part_selection_menu(detection, installed)
+
+    return _prompt_part_selection_fallback(detection)
+
+
+def _prompt_part_selection_menu(
+    detection: PartDetection, installed: dict[int, str]
+) -> tuple[int, ...]:
+    choices = [
+        questionary.Choice(
+            title=(
+                f"{part.label}"
+                + (
+                    f" (installed v{installed[part.number]})"
+                    if part.number in installed
+                    else ""
+                )
+            ),
+            value=part.number,
+            checked=False,
+        )
+        for part in detection.parts
+    ]
+    answer = questionary.checkbox(
+        "This thread is split into multiple games. Pick parts to download:",
+        choices=choices,
+    ).ask()
+    if not answer:
+        raise click.ClickException("No parts selected; nothing to do.")
+    return tuple(sorted(answer))
+
+
+def _prompt_part_selection_fallback(detection: PartDetection) -> tuple[int, ...]:
+    from vnmaster.downloads.selector import parse_parts_option
+
+    available = tuple(part.number for part in detection.parts)
+    click.echo("This thread is split into multiple games:")
+    for part in detection.parts:
+        click.echo(f"  {part.number}. {part.label}")
+    while True:
+        raw = click.prompt("Choose parts (numbers/ranges, or 'all')")
+        try:
+            selected = parse_parts_option(raw, available)
+        except ValueError as exc:
+            click.echo(f"Invalid selection: {exc}")
+            continue
+        if not selected:
+            raise click.ClickException("No parts selected; nothing to do.")
+        return selected
+
+
+def _installed_part_versions(engine: Engine, thread_id: int) -> dict[int, str]:
+    import re as _re
+
+    from vnmaster.downloads.state import list_install_states
+
+    installed: dict[int, str] = {}
+    for state in list_install_states(engine):
+        if state.f95_thread_id != thread_id or not state.version:
+            continue
+        for entry in state.artifacts:
+            label = entry.get("part")
+            if not isinstance(label, str):
+                continue
+            match = _re.search(r"(\d+)\s*$", label)
+            if match:
+                installed[int(match.group(1))] = state.version
+    return installed
