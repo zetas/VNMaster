@@ -78,3 +78,12 @@ def test_scan_does_not_descend_into_a_matched_game(tmp_path: Path) -> None:
 def test_scan_ignores_non_game_grouping_dirs(tmp_path: Path) -> None:
     (tmp_path / "empty-group" / "notagame").mkdir(parents=True)
     assert scan_disk(tmp_path) == []
+
+
+def test_finds_games_in_part_subdirs(tmp_path: Path) -> None:
+    build = tmp_path / "Split Game" / "v2.0" / "Part 2" / "game" / "SplitGame-pc"
+    (build / "renpy").mkdir(parents=True)
+    (build / "game").mkdir()
+    (build / "SplitGame.sh").touch()
+    names = {g.folder_name for g in scan_disk(tmp_path)}
+    assert "SplitGame-pc" in names

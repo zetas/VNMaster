@@ -6,9 +6,10 @@ A folder is a Ren'Py install if it contains:
   - a launcher: *.app, *.sh, or *.exe
 
 Games are not always direct children of the root — they're often grouped under
-a folder such as ~/Games/renpy-8.5.0/, so the walk descends a bounded number of
-levels. Once a folder is recognised as a game the walk stops there, since its
-own contents are assets rather than further games.
+a folder such as ~/Games/renpy-8.5.0/, and multi-part installs sit under per-part
+subdirs such as ~/Games/<Game>/<version>/<Part N>/, so the walk descends a bounded
+number of levels. Once a folder is recognised as a game the walk stops there, since
+its own contents are assets rather than further games.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ _CONFIG_VERSION_RE = re.compile(r'config\.version\s*=\s*"([^"]+)"')
 _SAVE_DIR_RE = re.compile(r'config\.save_directory\s*=\s*"([^"]+)"')
 
 
-def scan_disk(root: Path, max_depth: int = 2) -> list[InstalledGame]:
+def scan_disk(root: Path, max_depth: int = 5) -> list[InstalledGame]:
     if not root.exists() or not root.is_dir():
         return []
 
