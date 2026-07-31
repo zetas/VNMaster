@@ -98,21 +98,42 @@ def execute_download_plan_detailed(
 
     version = _safe_component(plan.game.version or "unknown-version")
     final_dir = destination_root / _safe_component(plan.game.title) / version
-    if final_dir.exists():
+    return _execute_pairs(
+        list(zip(plan.artifacts, candidates, strict=True)),
+        final_dir=final_dir,
+        staging_parent=destination_root,
+        urm_mods_dir=urm_mods_dir,
+        downloader=downloader,
+        unpacker=unpacker,
+        reporter=reporter,
+        replace_existing=False,
+    )
+
+
+def _execute_pairs(
+    pairs: list[tuple[PlannedArtifact, tuple[ResolvedDownload, ...]]],
+    *,
+    final_dir: Path,
+    staging_parent: Path,
+    urm_mods_dir: Path | None,
+    downloader: Callable[[str, Path], list[Path]],
+    unpacker: Callable[[list[Path], Path], None],
+    reporter: Callable[[str], None],
+    replace_existing: bool = False,
+) -> DownloadExecutionResult:
+    if final_dir.exists() and not replace_existing:
         raise DestinationExistsError(
             f"Destination already exists; refusing to overwrite it: {final_dir}"
         )
 
-    destination_root.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".vnmaster-fetch-", dir=destination_root))
+    staging_parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".vnmaster-fetch-", dir=staging_parent))
     published = False
     game_download: ResolvedDownload | None = None
     executions: list[ArtifactExecution] = []
     installable_addons: list[tuple[int, PlannedArtifact, Path]] = []
     try:
-        for index, (artifact, artifact_candidates) in enumerate(
-            zip(plan.artifacts, candidates, strict=True), start=1
-        ):
+        for index, (artifact, artifact_candidates) in enumerate(pairs, start=1):
             if artifact.kind == "game":
                 output_dir = staging / "game"
                 archive_dir = staging / "archive"
@@ -219,7 +240,17 @@ def execute_download_plan_detailed(
             reporter(f"Verified: {check}")
 
         final_dir.parent.mkdir(parents=True, exist_ok=True)
-        staging.replace(final_dir)
+        if final_dir.exists():
+            if not replace_existing:
+                raise DestinationExistsError(
+                    f"Destination already exists; refusing to overwrite it: {final_dir}"
+                )
+            previous = final_dir.parent / f".vnmaster-previous-{staging.name}"
+            final_dir.replace(previous)
+            staging.replace(final_dir)
+            shutil.rmtree(previous)
+        else:
+            staging.replace(final_dir)
         published = True
         return DownloadExecutionResult(
             final_dir=final_dir,

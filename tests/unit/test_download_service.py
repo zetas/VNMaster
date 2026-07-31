@@ -15,6 +15,7 @@ from vnmaster.downloads.models import (
 from vnmaster.downloads.service import (
     ArtifactDownloadError,
     DestinationExistsError,
+    _execute_pairs,
     execute_download_plan,
     execute_download_plan_detailed,
 )
@@ -292,3 +293,54 @@ def test_execute_plan_refuses_to_overwrite_existing_version(tmp_path: Path) -> N
             resolved_urls=["https://mega.nz/file/abc#key"],
             destination_root=tmp_path,
         )
+
+
+def test_execute_pairs_replaces_existing_dir_when_allowed(tmp_path: Path) -> None:
+    artifact = _plan().artifacts[0]
+    marker = {"run": 1}
+
+    def downloader(url: str, destination: Path) -> list[Path]:
+        destination.mkdir(parents=True)
+        payload = destination / "game.zip"
+        payload.write_bytes(b"archive")
+        return [payload]
+
+    def unpacker(downloaded: list[Path], destination: Path) -> None:
+        destination.mkdir(parents=True)
+        (destination / f"run-{marker['run']}.marker").write_text("marker")
+
+    final_dir = tmp_path / "A Game" / "v1.2"
+    pairs = [
+        (
+            artifact,
+            (ResolvedDownload("MEGA", artifact.locator, "https://mega.nz/file/abc#key"),),
+        )
+    ]
+
+    _execute_pairs(
+        pairs,
+        final_dir=final_dir,
+        staging_parent=tmp_path,
+        urm_mods_dir=None,
+        downloader=downloader,
+        unpacker=unpacker,
+        reporter=lambda _message: None,
+        replace_existing=True,
+    )
+    assert (final_dir / "game" / "run-1.marker").exists()
+
+    marker["run"] = 2
+    _execute_pairs(
+        pairs,
+        final_dir=final_dir,
+        staging_parent=tmp_path,
+        urm_mods_dir=None,
+        downloader=downloader,
+        unpacker=unpacker,
+        reporter=lambda _message: None,
+        replace_existing=True,
+    )
+
+    assert (final_dir / "game" / "run-2.marker").exists()
+    assert not (final_dir / "game" / "run-1.marker").exists()
+    assert list(tmp_path.glob(".vnmaster-previous-*")) == []
