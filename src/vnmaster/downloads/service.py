@@ -268,6 +268,81 @@ def _execute_pairs(
             shutil.rmtree(staging)
 
 
+@dataclass(frozen=True)
+class PartFailure:
+    part: str
+    error: str
+
+
+@dataclass(frozen=True)
+class MultiPartExecutionResult:
+    version_root: Path
+    completed: tuple[DownloadExecutionResult, ...]
+    failures: tuple[PartFailure, ...]
+
+
+def execute_multipart_plan(
+    plan: DownloadPlan,
+    *,
+    resolved_downloads: list[tuple[ResolvedDownload, ...]] | None = None,
+    resolved_urls: list[str] | None = None,
+    destination_root: Path,
+    urm_mods_dir: Path | None = None,
+    downloader: Callable[[str, Path], list[Path]] = download_url,
+    unpacker: Callable[[list[Path], Path], None] = unpack_payload,
+    reporter: Callable[[str], None] = lambda _message: None,
+    on_part_complete: Callable[[str, DownloadExecutionResult], None] | None = None,
+) -> MultiPartExecutionResult:
+    candidates = _normalize_resolved_downloads(
+        plan, resolved_downloads=resolved_downloads, resolved_urls=resolved_urls
+    )
+    pairs = list(zip(plan.artifacts, candidates, strict=True))
+    games = [(a, c) for a, c in pairs if a.kind == "game"]
+    if any(artifact.part is None for artifact, _ in games):
+        raise ValueError("execute_multipart_plan requires part labels on every game")
+    tagged = [(a, c) for a, c in pairs if a.kind == "addon" and a.part is not None]
+    shared = [(a, c) for a, c in pairs if a.kind == "addon" and a.part is None]
+
+    version = _safe_component(plan.game.version or "unknown-version")
+    version_root = destination_root / _safe_component(plan.game.title) / version
+    version_root.mkdir(parents=True, exist_ok=True)
+
+    completed: list[DownloadExecutionResult] = []
+    failures: list[PartFailure] = []
+    for artifact, artifact_candidates in games:
+        part_pairs = [
+            (artifact, artifact_candidates),
+            *[(a, c) for a, c in tagged if a.part == artifact.part],
+            *shared,
+        ]
+        part_dir = version_root / _safe_component(artifact.part)
+        reporter(f"Fetching {artifact.part} into {part_dir}...")
+        try:
+            result = _execute_pairs(
+                part_pairs,
+                final_dir=part_dir,
+                staging_parent=destination_root,
+                urm_mods_dir=urm_mods_dir,
+                downloader=downloader,
+                unpacker=unpacker,
+                reporter=reporter,
+                replace_existing=True,
+            )
+        except (ArtifactDownloadError, RuntimeError, OSError) as exc:
+            detail = _concise_error(exc)
+            failures.append(PartFailure(artifact.part, detail))
+            reporter(f"{artifact.part} failed: {detail}")
+            continue
+        completed.append(result)
+        if on_part_complete is not None:
+            on_part_complete(artifact.part, result)
+    return MultiPartExecutionResult(
+        version_root=version_root,
+        completed=tuple(completed),
+        failures=tuple(failures),
+    )
+
+
 def _normalize_resolved_downloads(
     plan: DownloadPlan,
     *,

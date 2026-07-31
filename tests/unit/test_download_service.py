@@ -18,6 +18,7 @@ from vnmaster.downloads.service import (
     _execute_pairs,
     execute_download_plan,
     execute_download_plan_detailed,
+    execute_multipart_plan,
 )
 from vnmaster.downloads.urm import URM_RPA_NAME
 
@@ -344,3 +345,165 @@ def test_execute_pairs_replaces_existing_dir_when_allowed(tmp_path: Path) -> Non
     assert (final_dir / "game" / "run-2.marker").exists()
     assert not (final_dir / "game" / "run-1.marker").exists()
     assert list(tmp_path.glob(".vnmaster-previous-*")) == []
+
+
+def _part_plan() -> DownloadPlan:
+    game = ThreadInfo(
+        thread_id=42,
+        title="A Game",
+        version="v1.2",
+        thread_type=1,
+        url="https://f95zone.to/threads/.42/",
+        downloads=(),
+    )
+    part1 = PlannedArtifact(
+        kind="game",
+        title="A Game",
+        version="v1.2",
+        thread_id=42,
+        thread_url=game.url,
+        group_name="Mac",
+        platform=None,
+        host="MEGA",
+        locator="https://f95zone.to/masked/mega.nz/part1",
+        part="Part 1",
+    )
+    part2 = PlannedArtifact(
+        kind="game",
+        title="A Game",
+        version="v1.2",
+        thread_id=42,
+        thread_url=game.url,
+        group_name="Mac",
+        platform=None,
+        host="MEGA",
+        locator="https://f95zone.to/masked/mega.nz/part2",
+        part="Part 2",
+    )
+    addon = PlannedArtifact(
+        kind="addon",
+        title="Bonus Extras",
+        version="v1.2",
+        thread_id=99,
+        thread_url="https://f95zone.to/threads/99",
+        group_name="Extras",
+        platform=None,
+        host="MEGA",
+        locator="https://f95zone.to/masked/mega.nz/patch",
+    )
+    return DownloadPlan(game=game, artifacts=(part1, part2, addon))
+
+
+def _multipart_downloader(url: str, destination: Path) -> list[Path]:
+    destination.mkdir(parents=True)
+    payload = destination / "payload.zip"
+    payload.write_bytes(url.encode())
+    return [payload]
+
+
+def _multipart_unpacker(downloaded: list[Path], destination: Path) -> None:
+    destination.mkdir(parents=True)
+    (destination / "script.rpyc").write_bytes(downloaded[0].read_bytes())
+
+
+def test_multipart_publishes_each_part_into_its_own_dir(tmp_path: Path) -> None:
+    result = execute_multipart_plan(
+        _part_plan(),
+        resolved_urls=[
+            "https://example.com/part1",
+            "https://example.com/part2",
+            "https://example.com/patch",
+        ],
+        destination_root=tmp_path,
+        downloader=_multipart_downloader,
+        unpacker=_multipart_unpacker,
+    )
+    assert result.failures == ()
+    assert [r.final_dir.name for r in result.completed] == ["Part 1", "Part 2"]
+    assert (result.version_root / "Part 1" / "game").is_dir()
+    assert (result.version_root / "Part 2" / "game").is_dir()
+
+
+def test_multipart_second_part_failure_keeps_the_first(tmp_path: Path) -> None:
+    def downloader(url: str, destination: Path) -> list[Path]:
+        if "part2" in url:
+            raise RuntimeError("mirror down")
+        return _multipart_downloader(url, destination)
+
+    result = execute_multipart_plan(
+        _part_plan(),
+        resolved_urls=[
+            "https://example.com/part1",
+            "https://example.com/part2",
+            "https://example.com/patch",
+        ],
+        destination_root=tmp_path,
+        downloader=downloader,
+        unpacker=_multipart_unpacker,
+    )
+    assert len(result.completed) == 1
+    assert result.completed[0].final_dir.name == "Part 1"
+    assert result.failures[0].part == "Part 2"
+    assert (result.version_root / "Part 1" / "game").is_dir()
+
+
+def test_multipart_on_part_complete_fires_per_part(tmp_path: Path) -> None:
+    seen: list[str] = []
+    execute_multipart_plan(
+        _part_plan(),
+        resolved_urls=[
+            "https://example.com/part1",
+            "https://example.com/part2",
+            "https://example.com/patch",
+        ],
+        destination_root=tmp_path,
+        downloader=_multipart_downloader,
+        unpacker=_multipart_unpacker,
+        on_part_complete=lambda part, _res: seen.append(part),
+    )
+    assert seen == ["Part 1", "Part 2"]
+
+
+def test_multipart_refetch_replaces_only_the_chosen_part(tmp_path: Path) -> None:
+    def make_unpacker(marker: bytes) -> object:
+        def unpacker(downloaded: list[Path], destination: Path) -> None:
+            destination.mkdir(parents=True)
+            (destination / "script.rpyc").write_bytes(marker)
+
+        return unpacker
+
+    plan = _part_plan()
+    result = execute_multipart_plan(
+        plan,
+        resolved_urls=[
+            "https://example.com/part1",
+            "https://example.com/part2",
+            "https://example.com/patch",
+        ],
+        destination_root=tmp_path,
+        downloader=_multipart_downloader,
+        unpacker=make_unpacker(b"v1"),
+    )
+    part1_before = (
+        result.version_root / "Part 1" / "game" / "script.rpyc"
+    ).read_bytes()
+
+    part2_only = DownloadPlan(
+        plan.game,
+        tuple(artifact for artifact in plan.artifacts if artifact.part != "Part 1"),
+    )
+    refetch_result = execute_multipart_plan(
+        part2_only,
+        resolved_urls=["https://example.com/part2-new", "https://example.com/patch"],
+        destination_root=tmp_path,
+        downloader=_multipart_downloader,
+        unpacker=make_unpacker(b"v2"),
+    )
+
+    assert refetch_result.version_root == result.version_root
+    assert (
+        result.version_root / "Part 1" / "game" / "script.rpyc"
+    ).read_bytes() == part1_before
+    assert (
+        result.version_root / "Part 2" / "game" / "script.rpyc"
+    ).read_bytes() == b"v2"
