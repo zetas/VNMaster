@@ -186,7 +186,8 @@ def build_download_plan(
     selected: list[PlannedArtifact] = [
         *game_artifacts,
         *_select_embedded_addons(
-            game, game_artifacts, preferred_hosts, detection=detection
+            game, game_artifacts, preferred_hosts,
+            detection=detection, selected_parts=selected_parts,
         ),
     ]
 
@@ -364,6 +365,7 @@ def _select_embedded_addons(
     preferred_hosts: list[str],
     *,
     detection: PartDetection | None = None,
+    selected_parts: tuple[int, ...] | None = None,
 ) -> list[PlannedArtifact]:
     """Select optional patch/extra groups published in the main game thread."""
     used_group_names = {artifact.group_name for artifact in game_artifacts}
@@ -379,15 +381,27 @@ def _select_embedded_addons(
             continue
         if not _OPTIONAL_GROUP_RE.search(group.name):
             continue
+        part_label = None
+        part_number = None
+        if detection is not None and detection.family is not None:
+            found = _FAMILY_RES[detection.family].findall(group.name)
+            if len(found) == 1 and "-" not in found[0]:
+                part_number = int(found[0])
+                part_label = f"{detection.family.capitalize()} {part_number}"
+        if (
+            detection is not None
+            and detection.is_multipart
+            and selected_parts is not None
+            and part_number is not None
+            and part_number not in selected_parts
+        ):
+            # Tagged to a part the user didn't select; it must never reach
+            # the picker, since nothing downstream will ever execute it.
+            continue
         mirrors = _ordered_mirrors(group, preferred_hosts, allow_host_fallback=True)
         if not mirrors:
             continue
         mirror, *alternates = mirrors
-        part_label = None
-        if detection is not None and detection.family is not None:
-            found = _FAMILY_RES[detection.family].findall(group.name)
-            if len(found) == 1 and "-" not in found[0]:
-                part_label = f"{detection.family.capitalize()} {int(found[0])}"
         artifacts.append(
             PlannedArtifact(
                 kind="addon",

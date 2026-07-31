@@ -439,6 +439,17 @@ def test_part_tagged_walkthrough_is_an_addon_bound_to_its_part() -> None:
                for a in addons)
 
 
+def test_walkthrough_tagged_to_unselected_part_never_reaches_plan() -> None:
+    game = _part_thread()
+    detection = detect_parts(game.downloads)
+    plan = build_download_plan(
+        game, [], platform_priority=["mac", "windows"], preferred_hosts=["mega"],
+        detection=detection, selected_parts=(1,),
+    )
+    addons = [a for a in plan.artifacts if a.kind == "addon"]
+    assert not any("walkthrough" in a.group_name.casefold() for a in addons)
+
+
 def test_multipart_detection_without_selection_raises() -> None:
     game = _part_thread()
     detection = detect_parts(game.downloads)
