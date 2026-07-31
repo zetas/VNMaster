@@ -165,15 +165,30 @@ def build_download_plan(
     platform_priority: list[str],
     preferred_hosts: list[str],
     allow_host_fallback: bool = True,
+    detection: PartDetection | None = None,
+    selected_parts: tuple[int, ...] | None = None,
 ) -> DownloadPlan:
-    game_artifact = _select_game_artifact(
-        game, platform_priority, preferred_hosts, allow_host_fallback
-    )
-    selected: list[PlannedArtifact] = [
-        game_artifact,
-        *_select_embedded_addons(game, game_artifact, preferred_hosts),
-    ]
     skipped: list[SkippedArtifact] = []
+    if detection is not None and detection.is_multipart:
+        if not selected_parts:
+            raise ValueError("Multi-part threads require an explicit part selection")
+        game_artifacts, part_skips = _select_part_artifacts(
+            game, detection, selected_parts,
+            platform_priority, preferred_hosts, allow_host_fallback,
+        )
+        skipped.extend(part_skips)
+    else:
+        game_artifacts = [
+            _select_game_artifact(
+                game, platform_priority, preferred_hosts, allow_host_fallback
+            )
+        ]
+    selected: list[PlannedArtifact] = [
+        *game_artifacts,
+        *_select_embedded_addons(
+            game, game_artifacts, preferred_hosts, detection=detection
+        ),
+    ]
 
     for addon in addons:
         compatible, reason = addon_matches_game(game, addon)
@@ -195,16 +210,16 @@ def build_download_plan(
     return DownloadPlan(game=game, artifacts=tuple(selected), skipped=tuple(skipped))
 
 
-def _select_game_artifact(
-    game: ThreadInfo,
+def _platform_candidates(
+    groups: tuple[tuple[int, DownloadGroup], ...],
     platform_priority: list[str],
     preferred_hosts: list[str],
     allow_host_fallback: bool,
-) -> PlannedArtifact:
+) -> list[DownloadMirror]:
     candidates: list[DownloadMirror] = []
     seen_groups: set[int] = set()
     for platform in platform_priority:
-        for group_index, group in enumerate(game.downloads):
+        for group_index, group in groups:
             if group_index in seen_groups:
                 continue
             if not _group_matches_platform(group.name, platform):
@@ -216,13 +231,24 @@ def _select_game_artifact(
                 seen_groups.add(group_index)
                 candidates.extend(
                     DownloadMirror(
-                        mirror.name,
-                        mirror.locator,
-                        platform=platform,
-                        group_name=group.name,
+                        mirror.name, mirror.locator,
+                        platform=platform, group_name=group.name,
                     )
                     for mirror in mirrors
                 )
+    return candidates
+
+
+def _select_game_artifact(
+    game: ThreadInfo,
+    platform_priority: list[str],
+    preferred_hosts: list[str],
+    allow_host_fallback: bool,
+) -> PlannedArtifact:
+    candidates = _platform_candidates(
+        tuple(enumerate(game.downloads)),
+        platform_priority, preferred_hosts, allow_host_fallback,
+    )
     if candidates:
         mirror, *alternates = candidates
         return PlannedArtifact(
@@ -241,6 +267,64 @@ def _select_game_artifact(
         f"No full build for {platform_priority!r} was available from "
         f"{preferred_hosts!r} on {game.title!r}"
     )
+
+
+def _select_part_artifacts(
+    game: ThreadInfo,
+    detection: PartDetection,
+    selected_parts: tuple[int, ...],
+    platform_priority: list[str],
+    preferred_hosts: list[str],
+    allow_host_fallback: bool,
+) -> tuple[list[PlannedArtifact], list[SkippedArtifact]]:
+    artifacts: list[PlannedArtifact] = []
+    skipped: list[SkippedArtifact] = []
+    by_number = {part.number: part for part in detection.parts}
+    for number in selected_parts:
+        part = by_number.get(number)
+        if part is None:
+            raise ValueError(f"Part {number} was not detected in this thread")
+        part_groups = tuple(
+            (index, game.downloads[index]) for index in part.group_indexes
+        )
+        candidates = _platform_candidates(
+            part_groups, platform_priority, preferred_hosts, allow_host_fallback
+        )
+        if not candidates:
+            # Bare "Part 1" headings carry no platform token; keep them
+            # eligible as platform-neutral, like add-on groups.
+            for _index, group in part_groups:
+                candidates.extend(
+                    _ordered_mirrors(group, preferred_hosts, allow_host_fallback)
+                )
+        if not candidates:
+            skipped.append(
+                SkippedArtifact(
+                    f"{game.title} {part.label}", "no downloadable mirrors found"
+                )
+            )
+            continue
+        mirror, *alternates = candidates
+        artifacts.append(
+            PlannedArtifact(
+                kind="game",
+                title=game.title,
+                version=game.version,
+                thread_id=game.thread_id,
+                thread_url=game.url,
+                group_name=mirror.group_name or part.label,
+                platform=mirror.platform,
+                host=mirror.name,
+                locator=mirror.locator,
+                alternate_mirrors=tuple(alternates),
+                part=part.label,
+            )
+        )
+    if not artifacts:
+        raise NoCompatibleDownloadError(
+            f"No selected part of {game.title!r} was downloadable"
+        )
+    return artifacts, skipped
 
 
 def _select_addon_artifact(
@@ -276,13 +360,22 @@ def _select_addon_artifact(
 
 def _select_embedded_addons(
     game: ThreadInfo,
-    game_artifact: PlannedArtifact,
+    game_artifacts: list[PlannedArtifact],
     preferred_hosts: list[str],
+    *,
+    detection: PartDetection | None = None,
 ) -> list[PlannedArtifact]:
     """Select optional patch/extra groups published in the main game thread."""
+    used_group_names = {artifact.group_name for artifact in game_artifacts}
+    part_owned_indexes: set[int] = set()
+    if detection is not None and detection.is_multipart:
+        for part in detection.parts:
+            part_owned_indexes.update(part.group_indexes)
     artifacts: list[PlannedArtifact] = []
-    for group in game.downloads:
-        if group.name == game_artifact.group_name:
+    for index, group in enumerate(game.downloads):
+        if group.name in used_group_names:
+            continue
+        if index in part_owned_indexes:
             continue
         if not _OPTIONAL_GROUP_RE.search(group.name):
             continue
@@ -290,6 +383,11 @@ def _select_embedded_addons(
         if not mirrors:
             continue
         mirror, *alternates = mirrors
+        part_label = None
+        if detection is not None and detection.family is not None:
+            found = _FAMILY_RES[detection.family].findall(group.name)
+            if len(found) == 1 and "-" not in found[0]:
+                part_label = f"{detection.family.capitalize()} {int(found[0])}"
         artifacts.append(
             PlannedArtifact(
                 kind="addon",
@@ -302,6 +400,7 @@ def _select_embedded_addons(
                 host=mirror.name,
                 locator=mirror.locator,
                 alternate_mirrors=tuple(alternates),
+                part=part_label,
             )
         )
     return artifacts

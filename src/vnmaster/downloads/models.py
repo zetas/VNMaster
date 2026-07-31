@@ -66,6 +66,7 @@ class PlannedArtifact:
     locator: str
     warning: str | None = None
     alternate_mirrors: tuple[DownloadMirror, ...] = field(default_factory=tuple)
+    part: str | None = None
 
     @property
     def mirrors(self) -> tuple[DownloadMirror, ...]:

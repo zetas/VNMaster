@@ -391,3 +391,73 @@ def test_parse_parts_rejects_bad_input() -> None:
         parse_parts_option("junk", available)
     with pytest.raises(ValueError):
         parse_parts_option("", available)
+
+
+def _part_thread() -> ThreadInfo:
+    return _thread(9, "Split Game", "v2.0", (
+        _group("Part 1 - Win"), _group("Part 1 - Mac"),
+        _group("Part 2 - Win"),
+        _group("Part 2 walkthrough"),
+        _group("Part 3"),          # platform-neutral heading
+    ))
+
+
+def test_multipart_plan_has_one_game_artifact_per_selected_part() -> None:
+    game = _part_thread()
+    detection = detect_parts(game.downloads)
+    plan = build_download_plan(
+        game, [], platform_priority=["mac", "windows"], preferred_hosts=["mega"],
+        detection=detection, selected_parts=(1, 2),
+    )
+    games = [a for a in plan.artifacts if a.kind == "game"]
+    assert [a.part for a in games] == ["Part 1", "Part 2"]
+    assert games[0].platform == "mac"        # per-part platform priority
+    assert games[1].platform == "windows"    # part 2 only has a Win group
+
+
+def test_platform_neutral_part_heading_is_still_downloadable() -> None:
+    game = _part_thread()
+    detection = detect_parts(game.downloads)
+    plan = build_download_plan(
+        game, [], platform_priority=["mac", "windows"], preferred_hosts=["mega"],
+        detection=detection, selected_parts=(3,),
+    )
+    games = [a for a in plan.artifacts if a.kind == "game"]
+    assert games[0].part == "Part 3"
+    assert games[0].platform is None
+
+
+def test_part_tagged_walkthrough_is_an_addon_bound_to_its_part() -> None:
+    game = _part_thread()
+    detection = detect_parts(game.downloads)
+    plan = build_download_plan(
+        game, [], platform_priority=["mac", "windows"], preferred_hosts=["mega"],
+        detection=detection, selected_parts=(1, 2),
+    )
+    addons = [a for a in plan.artifacts if a.kind == "addon"]
+    assert any("walkthrough" in a.group_name.casefold() and a.part == "Part 2"
+               for a in addons)
+
+
+def test_multipart_detection_without_selection_raises() -> None:
+    game = _part_thread()
+    detection = detect_parts(game.downloads)
+    with pytest.raises(ValueError):
+        build_download_plan(
+            game, [], platform_priority=["mac"], preferred_hosts=["mega"],
+            detection=detection, selected_parts=None,
+        )
+
+
+def test_single_part_threads_are_unchanged() -> None:
+    game = _thread(1, "A Game", "v1.2", (_group("Win/Linux"), _group("Mac")))
+    baseline = build_download_plan(
+        game, [], platform_priority=["mac", "windows", "linux"],
+        preferred_hosts=["mega"],
+    )
+    with_detection = build_download_plan(
+        game, [], platform_priority=["mac", "windows", "linux"],
+        preferred_hosts=["mega"], detection=detect_parts(game.downloads),
+    )
+    assert baseline == with_detection
+    assert baseline.artifacts[0].part is None
