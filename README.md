@@ -12,6 +12,7 @@ changelog magnitude.
 - [Manual smoke test](#manual-smoke-test)
 - [Discord slash commands](#discord-slash-commands)
 - [Download and extract a game](#download-and-extract-a-game)
+  - [Multi-part games](#multi-part-games)
 - [Rebuild a downloaded game](#rebuild-a-downloaded-game)
 - [Platform compatibility and contributing](#platform-compatibility-and-contributing)
 - [Tests](#tests)
@@ -193,6 +194,19 @@ add-ons, detected Ren'Py directory, and URM before publishing the staged
 installation. It stores the resulting install plan, payload checksums, and
 verification results in VNMaster's SQLite database; there is no manifest JSON
 beside the game.
+
+### Multi-part games
+
+Some devs split one story into several discrete games in a single thread
+("Part 1".."Part 7"). `vnmaster fetch` detects this from the download group
+names and asks which parts to download (nothing is pre-selected). Each part
+installs into its own subdir under the version folder and can be added or
+re-downloaded later by running fetch again.
+
+Non-interactive runs must be explicit: `--yes` requires `--parts`, e.g.
+`vnmaster fetch "grandma's house" --yes --parts 1-3` or `--parts all`.
+Threads whose download section only exposes a flat link list (no group
+headings) cannot be detected; fetch warns and treats them as a single game.
 
 ## Rebuild a downloaded game
 
