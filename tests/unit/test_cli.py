@@ -8,6 +8,7 @@ from vnmaster.cli import (
     _guard_incompatible_addons,
     _optional_choice_label,
     _parse_optional_selection,
+    _print_download_candidates,
     _prompt_game_resolution,
     _prompt_optional_selection_menu,
     _resolve_part_selection,
@@ -119,6 +120,51 @@ def test_guard_incompatible_addons_requires_explicit_force() -> None:
     with pytest.raises(click.ClickException, match="--force-incompatible-addons"):
         _guard_incompatible_addons(plan, force=False, assume_yes=True)
     assert _guard_incompatible_addons(plan, force=True, assume_yes=True) is plan
+
+
+def _game_artifact(part: str | None = None) -> PlannedArtifact:
+    return PlannedArtifact(
+        kind="game",
+        title="Split Game",
+        version="v2",
+        thread_id=1,
+        thread_url="thread",
+        group_name="Win/Mac",
+        platform="mac",
+        host="MEGA",
+        locator="game",
+        part=part,
+    )
+
+
+def test_print_download_candidates_lists_every_game_as_required(capsys) -> None:
+    game = ThreadInfo(1, "Split Game", "v2", None, "thread", ())
+    plan = DownloadPlan(
+        game,
+        (
+            _game_artifact(part="Part 1"),
+            _game_artifact(part="Part 2"),
+            _optional_artifact("Part 2 walkthrough"),
+        ),
+    )
+
+    _print_download_candidates(plan, Path("/dest"))
+
+    output = capsys.readouterr().out
+    assert output.count("game: Split Game") == 2
+    assert "Optional downloads found:" in output
+    assert "  1. addon: Part 2 walkthrough" in output
+
+
+def test_print_download_candidates_single_part_output_is_unchanged(capsys) -> None:
+    game = ThreadInfo(1, "A Game", "v2", None, "thread", ())
+    plan = DownloadPlan(game, (_game_artifact(),))
+
+    _print_download_candidates(plan, Path("/dest"))
+
+    output = capsys.readouterr().out
+    assert "Required download:\n  game: Split Game" in output
+    assert "Optional downloads found: none" in output
 
 
 def test_game_resolution_menu_shows_creator_version_and_thread(monkeypatch) -> None:
@@ -336,6 +382,96 @@ def test_unpair_subcommand_missing_exits_nonzero(tmp_path: Path, monkeypatch) ->
     result = runner.invoke(main, ["unpair", "ghost", "--config", str(config_file)])
     assert result.exit_code != 0
     assert "No pairing found for" in result.output
+
+
+def _fake_download_result(final_dir: Path, *, part: str | None = None):
+    from vnmaster.downloads.models import ResolvedDownload
+    from vnmaster.downloads.service import ArtifactExecution, DownloadExecutionResult
+
+    archive = final_dir / "archive" / "game.zip"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_bytes(b"archive")
+    artifact = PlannedArtifact(
+        kind="game",
+        title="Split Game",
+        version="v2.0",
+        thread_id=77,
+        thread_url="https://f95zone.to/threads/.77/",
+        group_name="Win/Linux",
+        platform="windows",
+        host="GOFILE",
+        locator="https://gofile.io/d/example",
+        part=part,
+    )
+    execution = ArtifactExecution(
+        artifact=artifact,
+        download=ResolvedDownload(
+            "GOFILE", artifact.locator, "https://gofile.io/d/example", platform="windows",
+        ),
+        output_path=Path("game"),
+        archive_paths=(Path("archive/game.zip"),),
+    )
+    return DownloadExecutionResult(
+        final_dir=final_dir,
+        artifacts=(execution,),
+        verification_checks=("game present",),
+        renpy_game_dir=None,
+        urm_path=None,
+    )
+
+
+def test_rebuild_command_prints_version_root_for_a_multipart_install(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from vnmaster.downloads.rebuild import RebuildResult
+    from vnmaster.downloads.state import save_install_state
+
+    engine, config_file = _make_test_engine_and_config(tmp_path, monkeypatch)
+    root = tmp_path / "Games" / "Split Game" / "v2.0"
+    save_install_state(
+        engine, _fake_download_result(root / "Part 1", part="Part 1"),
+        part="Part 1", install_root=root,
+    )
+    save_install_state(
+        engine, _fake_download_result(root / "Part 2", part="Part 2"),
+        part="Part 2", install_root=root,
+    )
+
+    monkeypatch.setattr(
+        "vnmaster.downloads.rebuild.rebuild_install",
+        lambda state, **kwargs: RebuildResult(state.install_path, None, ("ok",)),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "rebuild", str(root), "--yes", "--config", str(config_file),
+    ])
+    assert result.exit_code == 0, result.output
+    assert f"Rebuilt: {root}\n" in result.output
+    assert f"Rebuilt: {root / 'game'}" not in result.output
+
+
+def test_rebuild_command_prints_game_dir_for_a_legacy_install(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from vnmaster.downloads.rebuild import RebuildResult
+    from vnmaster.downloads.state import save_install_state
+
+    engine, config_file = _make_test_engine_and_config(tmp_path, monkeypatch)
+    final_dir = tmp_path / "Games" / "Split Game" / "v2.0"
+    save_install_state(engine, _fake_download_result(final_dir))
+
+    monkeypatch.setattr(
+        "vnmaster.downloads.rebuild.rebuild_install",
+        lambda state, **kwargs: RebuildResult(state.install_path, None, ("ok",)),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "rebuild", str(final_dir), "--yes", "--config", str(config_file),
+    ])
+    assert result.exit_code == 0, result.output
+    assert f"Rebuilt: {final_dir / 'game'}\n" in result.output
 
 
 def _detection() -> PartDetection:

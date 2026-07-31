@@ -955,7 +955,11 @@ def rebuild(
 
     if result.backup_path is not None:
         click.echo(f"Backup: {result.backup_path / 'game'}")
-    click.echo(f"Rebuilt: {result.install_path / 'game'}")
+    is_multipart = any(
+        isinstance(artifact.get("part"), str) for artifact in state.artifacts
+    )
+    rebuilt_path = result.install_path if is_multipart else result.install_path / "game"
+    click.echo(f"Rebuilt: {rebuilt_path}")
 
 
 @main.command("installs")
@@ -990,9 +994,11 @@ def _print_download_candidates(plan: DownloadPlan, destination: Path) -> None:
         f"· thread #{plan.game.thread_id}"
     )
     click.echo(f"Destination: {destination.expanduser()}")
-    required, *optional = plan.artifacts
+    required = [a for a in plan.artifacts if a.kind == "game"]
+    optional = [a for a in plan.artifacts if a.kind == "addon"]
     click.echo("Required download:")
-    _print_artifact(required, prefix="  ")
+    for artifact in required:
+        _print_artifact(artifact, prefix="  ")
     if optional:
         click.echo("Optional downloads found:")
         for index, artifact in enumerate(optional, start=1):
