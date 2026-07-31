@@ -202,3 +202,7 @@ installs without parts rebuild exactly as today.
   partition; state merge semantics; part-by-part rebuild; composite
   numbering and HTML-fallback threads fall back to single-game with a
   warning.
+- After final review: add-on targeting (line 98) narrowed at implementation
+  time to embedded download groups only. A separate add-on thread whose
+  title carries the family token is not tagged to a part; it stays shared
+  across every selected part like an untagged add-on.
