@@ -9,6 +9,7 @@ from vnmaster.downloads.selector import (
     build_download_plan,
     detect_parts,
     is_requested_addon,
+    parse_parts_option,
 )
 
 
@@ -368,3 +369,25 @@ def test_range_numbered_group_is_ignored_with_warning() -> None:
     owned = {i for p in detection.parts for i in p.group_indexes}
     assert 2 not in owned
     assert any("Part 1-2 bundle" in w for w in detection.warnings)
+
+
+def test_parse_parts_numbers_ranges_and_all() -> None:
+    available = (1, 2, 4)
+    assert parse_parts_option("all", available) == (1, 2, 4)
+    assert parse_parts_option("1,4", available) == (1, 4)
+    assert parse_parts_option("1-5", available) == (1, 2, 4)
+    assert parse_parts_option("4,1-2", available) == (1, 2, 4)
+
+
+def test_parse_parts_rejects_bad_input() -> None:
+    available = (1, 2, 4)
+    with pytest.raises(ValueError):
+        parse_parts_option("3", available)       # explicit number must exist
+    with pytest.raises(ValueError):
+        parse_parts_option("8-9", available)     # resolves empty
+    with pytest.raises(ValueError):
+        parse_parts_option("5-1", available)     # backwards range
+    with pytest.raises(ValueError):
+        parse_parts_option("junk", available)
+    with pytest.raises(ValueError):
+        parse_parts_option("", available)

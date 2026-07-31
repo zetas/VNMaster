@@ -125,6 +125,39 @@ def detect_parts(groups: tuple[DownloadGroup, ...]) -> PartDetection:
     return PartDetection(family=family, parts=parts, warnings=warnings)
 
 
+def parse_parts_option(raw: str, available: tuple[int, ...]) -> tuple[int, ...]:
+    cleaned = raw.strip().casefold()
+    if not cleaned:
+        raise ValueError("--parts requires a value such as '1,3-5' or 'all'")
+    if cleaned == "all":
+        return tuple(sorted(available))
+    chosen: set[int] = set()
+    for token in cleaned.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "-" in token:
+            start_raw, _, end_raw = token.partition("-")
+            try:
+                start, end = int(start_raw), int(end_raw)
+            except ValueError as exc:
+                raise ValueError(f"Invalid part range: {token!r}") from exc
+            if end < start:
+                raise ValueError(f"Invalid part range: {token!r}")
+            chosen.update(n for n in available if start <= n <= end)
+        else:
+            try:
+                number = int(token)
+            except ValueError as exc:
+                raise ValueError(f"Invalid part number: {token!r}") from exc
+            if number not in available:
+                raise ValueError(f"Part {number} does not exist in this thread")
+            chosen.add(number)
+    if not chosen:
+        raise ValueError("None of the requested parts exist in this thread")
+    return tuple(sorted(chosen))
+
+
 def build_download_plan(
     game: ThreadInfo,
     addons: list[ThreadInfo],
