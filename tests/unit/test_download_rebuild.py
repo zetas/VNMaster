@@ -139,3 +139,94 @@ def test_rebuild_refuses_tampered_archive_before_replacing_game(
         )
 
     assert original.read_bytes() == b"modified"
+
+
+def _multipart_state(tmp_path: Path, *, parts: tuple[str, ...]) -> InstallState:
+    root = tmp_path / "Games" / "A Game" / "v1"
+    artifacts: list[dict[str, object]] = []
+    hashes: dict[str, str] = {}
+    for label in parts:
+        game_dir = root / label / "game"
+        game_dir.mkdir(parents=True)
+        (game_dir / "data.bin").write_bytes(f"{label} original".encode())
+        archive = root / label / "archive" / "payload.zip"
+        archive.parent.mkdir(parents=True)
+        archive.write_bytes(f"{label} archive".encode())
+        artifacts.append(
+            {
+                "kind": "game",
+                "title": "A Game",
+                "part": label,
+                "archive_paths": [f"{label}/archive/payload.zip"],
+                "output_path": f"{label}/game",
+                "installable": False,
+                "platform": "windows",
+            }
+        )
+        hashes[f"{label}/archive/payload.zip"] = hash_payload(archive)
+    return InstallState(
+        id=1,
+        f95_thread_id=42,
+        game_title="A Game",
+        version="v1",
+        install_path=root,
+        thread_url="https://f95zone.to/threads/42",
+        platform="windows",
+        host="MEGA",
+        source_locator="masked",
+        artifacts=tuple(artifacts),
+        archive_hashes=hashes,
+        verification_checks=(),
+        renpy_game_dir=None,
+        urm_path=None,
+        installed_at=1,
+        updated_at=1,
+        last_rebuilt_at=None,
+    )
+
+
+def _multipart_unpacker(downloaded: list[Path], destination: Path) -> None:
+    destination.mkdir(parents=True)
+    (destination / "data.bin").write_bytes(b"rebuilt")
+
+
+def test_multipart_rebuild_rebuilds_each_part(tmp_path: Path) -> None:
+    state = _multipart_state(tmp_path, parts=("Part 1", "Part 2"))
+
+    result = rebuild_install(
+        state,
+        urm_mods_dir=tmp_path / "Mods",
+        unpacker=_multipart_unpacker,
+    )
+
+    assert (state.install_path / "Part 1" / "game").is_dir()
+    assert (state.install_path / "Part 2" / "game").is_dir()
+    assert any(check.startswith("Part 1: ") for check in result.verification_checks)
+    assert any(check.startswith("Part 2: ") for check in result.verification_checks)
+
+
+def test_multipart_rebuild_failure_reports_progress(tmp_path: Path) -> None:
+    state = _multipart_state(tmp_path, parts=("Part 1", "Part 2"))
+    (state.install_path / "Part 2" / "archive" / "payload.zip").write_bytes(b"junk")
+
+    with pytest.raises(RebuildError):
+        rebuild_install(
+            state,
+            urm_mods_dir=tmp_path / "Mods",
+            unpacker=_multipart_unpacker,
+        )
+
+    assert (state.install_path / "Part 1" / "game" / "data.bin").read_bytes() == b"rebuilt"
+
+
+def test_legacy_rebuild_leaves_no_part_dirs(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+
+    rebuild_install(
+        state,
+        urm_mods_dir=_mods_dir(tmp_path),
+        unpacker=_unpacker,
+    )
+
+    assert (state.install_path / "game").is_dir()
+    assert not any(p.name.startswith("Part ") for p in state.install_path.iterdir())

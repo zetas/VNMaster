@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from vnmaster.downloads.addon_installer import (
@@ -32,6 +33,103 @@ class RebuildResult:
 
 
 def rebuild_install(
+    state: InstallState,
+    *,
+    urm_mods_dir: Path,
+    keep_backup: bool = True,
+    unpacker: Callable[[list[Path], Path], None] = unpack_payload,
+    reporter: Callable[[str], None] = lambda _message: None,
+) -> RebuildResult:
+    """Rebuild a recorded install, dispatching legacy vs. multi-part states.
+
+    A legacy state (no ``"part"`` labels on its artifacts) rebuilds exactly
+    as before. A multi-part state rebuilds each part in label order,
+    scoping the recorded artifacts/hashes to that part; if a part fails,
+    already-rebuilt parts stay rebuilt and the error names what finished.
+    """
+    labels = sorted(
+        {
+            part
+            for artifact in state.artifacts
+            if isinstance(part := artifact.get("part"), str)
+        },
+        key=_part_sort_key,
+    )
+    if not labels:
+        return _rebuild_single(
+            state,
+            urm_mods_dir=urm_mods_dir,
+            keep_backup=keep_backup,
+            unpacker=unpacker,
+            reporter=reporter,
+        )
+
+    checks: list[str] = []
+    rebuilt: list[str] = []
+    for label in labels:
+        scoped = _scoped_state(state, label)
+        reporter(f"Rebuilding {label}...")
+        try:
+            result = _rebuild_single(
+                scoped,
+                urm_mods_dir=urm_mods_dir,
+                keep_backup=keep_backup,
+                unpacker=unpacker,
+                reporter=reporter,
+            )
+        except RebuildError as exc:
+            done = ", ".join(rebuilt) or "none"
+            raise RebuildError(f"{label} failed ({exc}); rebuilt so far: {done}") from exc
+        rebuilt.append(label)
+        checks.extend(f"{label}: {check}" for check in result.verification_checks)
+    return RebuildResult(state.install_path, None, tuple(checks))
+
+
+def _part_sort_key(label: str) -> tuple[str, int]:
+    match = re.search(r"(\d+)\s*$", label)
+    if match is None:
+        return (label, 0)
+    return (label[: match.start()], int(match.group(1)))
+
+
+def _scoped_state(state: InstallState, label: str) -> InstallState:
+    """Build the state for a single part, with its prefix stripped."""
+    prefix = f"{label}/"
+    artifacts: list[dict[str, object]] = []
+    for entry in state.artifacts:
+        if entry.get("part") != label:
+            continue
+        scoped_entry = dict(entry)
+        scoped_entry["output_path"] = str(entry["output_path"])[len(prefix):]
+        raw_paths = entry.get("archive_paths")
+        raw_paths = raw_paths if isinstance(raw_paths, list) else []
+        scoped_entry["archive_paths"] = [
+            str(path)[len(prefix):] for path in raw_paths if isinstance(path, str)
+        ]
+        artifacts.append(scoped_entry)
+    hashes = {
+        key[len(prefix):]: value
+        for key, value in state.archive_hashes.items()
+        if key.startswith(prefix)
+    }
+    platform = next(
+        (
+            artifact.get("platform")
+            for artifact in artifacts
+            if artifact.get("kind") == "game" and isinstance(artifact.get("platform"), str)
+        ),
+        None,
+    )
+    return replace(
+        state,
+        install_path=state.install_path / label,
+        artifacts=tuple(artifacts),
+        archive_hashes=hashes,
+        platform=platform if isinstance(platform, str) else None,
+    )
+
+
+def _rebuild_single(
     state: InstallState,
     *,
     urm_mods_dir: Path,
