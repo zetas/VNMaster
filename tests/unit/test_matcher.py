@@ -254,16 +254,24 @@ def test_name_match_still_works_and_emits_learned_pairing() -> None:
 
 
 def test_multiple_part_installs_aggregate_to_one_entry() -> None:
-    """A multi-part install (Part 1, Part 2 dirs under a shared version root)
-    should merge into a single library entry: sizes summed, install_path
-    collapsed to the shared version root, version kept from the first part.
+    """A multi-part install writes each part's build under its own per-part
+    dir, e.g. <version>/Part 1/<BuildDir> (see downloads/service.py's
+    execute_multipart_plan and scanners/disk.py). These should merge into a
+    single library entry: sizes summed, install_path collapsed to the
+    shared version root, version kept from the first part.
     """
     version_root = Path("/g/Split Game/v2.0")
     part1 = _disk("Split Game Part 1").model_copy(
-        update={"install_path": version_root / "Part 1", "disk_size_bytes": 100}
+        update={
+            "install_path": version_root / "Part 1" / "SplitGame-pc",
+            "disk_size_bytes": 100,
+        }
     )
     part2 = _disk("Split Game Part 2").model_copy(
-        update={"install_path": version_root / "Part 2", "disk_size_bytes": 250}
+        update={
+            "install_path": version_root / "Part 2" / "SplitGame2-pc",
+            "disk_size_bytes": 250,
+        }
     )
     f95 = _f95(55, "Split Game")
     result = match_library(
@@ -275,6 +283,30 @@ def test_multiple_part_installs_aggregate_to_one_entry() -> None:
     assert matches[0].disk_size_bytes == 350
     assert matches[0].install_path == version_root
     assert matches[0].installed_version == "0.5.0"
+
+
+def test_two_leftover_version_installs_do_not_aggregate() -> None:
+    """Two old version installs of the same game sitting side by side under
+    the same parent dir share a parent, but neither sits under a per-part
+    dir, so this is NOT a multi-part install. Must fall back to
+    last-one-wins (no summed sizes, no nonsense merged install_path).
+    """
+    parent = Path("/g")
+    old = _disk("Split Game-v1.0").model_copy(
+        update={"install_path": parent / "Split Game-v1.0", "disk_size_bytes": 100}
+    )
+    new = _disk("Split Game-v1.2").model_copy(
+        update={"install_path": parent / "Split Game-v1.2", "disk_size_bytes": 250}
+    )
+    f95 = _f95(56, "Split Game")
+    result = match_library(
+        play_history=[], installed=[old, new], f95_rows=[f95],
+        cached_pairings={}, fuzzy_threshold=85,
+    )
+    matches = [m for m in result.matches if m.f95_thread_id == 56]
+    assert len(matches) == 1
+    assert matches[0].disk_size_bytes == 250
+    assert matches[0].install_path == parent / "Split Game-v1.2"
 
 
 def test_cached_pairing_does_not_produce_learned_pairing() -> None:

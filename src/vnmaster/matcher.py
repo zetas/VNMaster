@@ -28,6 +28,20 @@ _NOISE_SUFFIXES = re.compile(
     r")$"
 )
 
+# Directory names the downloader creates for multi-part installs, e.g.
+# "Part 1", "Chapter 3" — see downloads/selector.py's _PART_FAMILIES.
+_PART_DIR_RE = re.compile(
+    r"^(?:Part|Chapter|Episode|Volume|Book|Act|Season) \d+$"
+)
+
+
+def _part_version_root(path: Path) -> Path | None:
+    """Version root of a per-part install, or None if path isn't under a part dir."""
+    for ancestor in path.parents:
+        if _PART_DIR_RE.match(ancestor.name):
+            return ancestor.parent
+    return None
+
 
 def _clean_for_match(name: str) -> str:
     """Strip timestamp + dev-suffix noise before fuzzy matching.
@@ -174,27 +188,39 @@ def match_library(
         # Cross-bind by save_dir_hint when present.
         save_name = d.save_dir_hint
         existing = by_thread.get(tid)
-        if existing is not None and existing.install_path is not None:
-            # Several installed dirs for one thread: a multi-part install.
-            # Aggregate instead of last-one-wins.
-            shared_root = (
-                existing.install_path.parent
-                if existing.install_path.parent == d.install_path.parent
-                else existing.install_path
-            )
+        existing_part_root = (
+            _part_version_root(existing.install_path)
+            if existing is not None and existing.install_path is not None
+            else None
+        )
+        d_part_root = _part_version_root(d.install_path)
+        if (
+            existing is not None
+            and existing.install_path is not None
+            and existing_part_root is not None
+            and existing_part_root == d_part_root
+        ):
+            # Both entries sit under a per-part dir with the same version
+            # root: a genuine multi-part install. Aggregate instead of
+            # last-one-wins.
             by_thread[tid] = LibraryMatch(
                 **{
                     **existing.__dict__,
-                    "install_path": shared_root,
-                    "installed_version": existing.installed_version
-                    or d.installed_version,
+                    "install_path": existing_part_root,
+                    "installed_version": (
+                        existing.installed_version
+                        if existing.installed_version is not None
+                        else d.installed_version
+                    ),
                     "disk_size_bytes": (existing.disk_size_bytes or 0)
                     + (d.disk_size_bytes or 0),
                 }
             )
         elif existing is not None:
-            # Existing came from play history only (no install yet):
-            # today's overwrite behavior is correct.
+            # Either existing came from play history only (no install yet),
+            # or the two installed dirs aren't a genuine part pair (e.g. two
+            # leftover version folders side by side): last-one-wins is
+            # correct, matching pre-aggregation behavior.
             by_thread[tid] = LibraryMatch(
                 **{**existing.__dict__, "install_path": d.install_path,
                    "installed_version": d.installed_version,
