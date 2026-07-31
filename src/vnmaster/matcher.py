@@ -197,16 +197,20 @@ def match_library(
         if (
             existing is not None
             and existing.install_path is not None
-            and existing_part_root is not None
-            and existing_part_root == d_part_root
+            and d_part_root is not None
+            and (
+                existing_part_root == d_part_root
+                or existing.install_path == d_part_root
+            )
         ):
             # Both entries sit under a per-part dir with the same version
-            # root: a genuine multi-part install. Aggregate instead of
-            # last-one-wins.
+            # root, or existing is already a merged entry sitting at that
+            # version root (3rd+ part arriving): a genuine multi-part
+            # install. Aggregate instead of last-one-wins.
             by_thread[tid] = LibraryMatch(
                 **{
                     **existing.__dict__,
-                    "install_path": existing_part_root,
+                    "install_path": d_part_root,
                     "installed_version": (
                         existing.installed_version
                         if existing.installed_version is not None

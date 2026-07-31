@@ -285,6 +285,33 @@ def test_multiple_part_installs_aggregate_to_one_entry() -> None:
     assert matches[0].installed_version == "0.5.0"
 
 
+def test_three_part_install_chains_aggregation() -> None:
+    """A 3rd (or later) part must still aggregate into the merged entry left
+    behind by the first two parts, even though that merged entry's
+    install_path is the version root itself (no "Part N" ancestor of its
+    own).
+    """
+    version_root = Path("/g/Split Game/v2.0")
+    part1 = _disk("Split Game Part 1").model_copy(
+        update={"install_path": version_root / "Part 1" / "game" / "A", "disk_size_bytes": 100}
+    )
+    part2 = _disk("Split Game Part 2").model_copy(
+        update={"install_path": version_root / "Part 2" / "game" / "B", "disk_size_bytes": 250}
+    )
+    part3 = _disk("Split Game Part 3").model_copy(
+        update={"install_path": version_root / "Part 3" / "game" / "C", "disk_size_bytes": 400}
+    )
+    f95 = _f95(57, "Split Game")
+    result = match_library(
+        play_history=[], installed=[part1, part2, part3], f95_rows=[f95],
+        cached_pairings={}, fuzzy_threshold=85,
+    )
+    matches = [m for m in result.matches if m.f95_thread_id == 57]
+    assert len(matches) == 1
+    assert matches[0].disk_size_bytes == 750
+    assert matches[0].install_path == version_root
+
+
 def test_two_leftover_version_installs_do_not_aggregate() -> None:
     """Two old version installs of the same game sitting side by side under
     the same parent dir share a parent, but neither sits under a per-part
