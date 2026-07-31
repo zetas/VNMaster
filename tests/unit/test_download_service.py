@@ -424,6 +424,22 @@ def test_multipart_publishes_each_part_into_its_own_dir(tmp_path: Path) -> None:
     assert (result.version_root / "Part 2" / "game").is_dir()
 
 
+def test_multipart_requires_part_label_on_every_game(tmp_path: Path) -> None:
+    plan = _part_plan()
+    unlabeled = PlannedArtifact(**{**plan.artifacts[0].__dict__, "part": None})
+    plan = DownloadPlan(plan.game, (unlabeled, *plan.artifacts[1:]))
+    with pytest.raises(ValueError, match="requires part labels"):
+        execute_multipart_plan(
+            plan,
+            resolved_urls=[
+                "https://example.com/part1",
+                "https://example.com/part2",
+                "https://example.com/patch",
+            ],
+            destination_root=tmp_path,
+        )
+
+
 def test_multipart_second_part_failure_keeps_the_first(tmp_path: Path) -> None:
     def downloader(url: str, destination: Path) -> list[Path]:
         if "part2" in url:

@@ -310,13 +310,15 @@ def execute_multipart_plan(
     completed: list[DownloadExecutionResult] = []
     failures: list[PartFailure] = []
     for artifact, artifact_candidates in games:
+        assert artifact.part is not None  # guarded above: every game has a part label
+        part_label = artifact.part
         part_pairs = [
             (artifact, artifact_candidates),
-            *[(a, c) for a, c in tagged if a.part == artifact.part],
+            *[(a, c) for a, c in tagged if a.part == part_label],
             *shared,
         ]
-        part_dir = version_root / _safe_component(artifact.part)
-        reporter(f"Fetching {artifact.part} into {part_dir}...")
+        part_dir = version_root / _safe_component(part_label)
+        reporter(f"Fetching {part_label} into {part_dir}...")
         try:
             result = _execute_pairs(
                 part_pairs,
@@ -330,12 +332,12 @@ def execute_multipart_plan(
             )
         except (ArtifactDownloadError, RuntimeError, OSError) as exc:
             detail = _concise_error(exc)
-            failures.append(PartFailure(artifact.part, detail))
-            reporter(f"{artifact.part} failed: {detail}")
+            failures.append(PartFailure(part_label, detail))
+            reporter(f"{part_label} failed: {detail}")
             continue
         completed.append(result)
         if on_part_complete is not None:
-            on_part_complete(artifact.part, result)
+            on_part_complete(part_label, result)
     return MultiPartExecutionResult(
         version_root=version_root,
         completed=tuple(completed),
