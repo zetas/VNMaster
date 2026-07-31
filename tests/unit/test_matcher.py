@@ -253,6 +253,30 @@ def test_name_match_still_works_and_emits_learned_pairing() -> None:
     assert name_lp[0].confidence == pytest.approx(0.95)
 
 
+def test_multiple_part_installs_aggregate_to_one_entry() -> None:
+    """A multi-part install (Part 1, Part 2 dirs under a shared version root)
+    should merge into a single library entry: sizes summed, install_path
+    collapsed to the shared version root, version kept from the first part.
+    """
+    version_root = Path("/g/Split Game/v2.0")
+    part1 = _disk("Split Game Part 1").model_copy(
+        update={"install_path": version_root / "Part 1", "disk_size_bytes": 100}
+    )
+    part2 = _disk("Split Game Part 2").model_copy(
+        update={"install_path": version_root / "Part 2", "disk_size_bytes": 250}
+    )
+    f95 = _f95(55, "Split Game")
+    result = match_library(
+        play_history=[], installed=[part1, part2], f95_rows=[f95],
+        cached_pairings={}, fuzzy_threshold=85,
+    )
+    matches = [m for m in result.matches if m.f95_thread_id == 55]
+    assert len(matches) == 1
+    assert matches[0].disk_size_bytes == 350
+    assert matches[0].install_path == version_root
+    assert matches[0].installed_version == "0.5.0"
+
+
 def test_cached_pairing_does_not_produce_learned_pairing() -> None:
     """Matches that come from cached_pairings must NOT appear in learned_pairings."""
     save = _save("BoringSaveName")

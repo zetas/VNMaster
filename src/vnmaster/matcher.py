@@ -174,7 +174,27 @@ def match_library(
         # Cross-bind by save_dir_hint when present.
         save_name = d.save_dir_hint
         existing = by_thread.get(tid)
-        if existing is not None:
+        if existing is not None and existing.install_path is not None:
+            # Several installed dirs for one thread: a multi-part install.
+            # Aggregate instead of last-one-wins.
+            shared_root = (
+                existing.install_path.parent
+                if existing.install_path.parent == d.install_path.parent
+                else existing.install_path
+            )
+            by_thread[tid] = LibraryMatch(
+                **{
+                    **existing.__dict__,
+                    "install_path": shared_root,
+                    "installed_version": existing.installed_version
+                    or d.installed_version,
+                    "disk_size_bytes": (existing.disk_size_bytes or 0)
+                    + (d.disk_size_bytes or 0),
+                }
+            )
+        elif existing is not None:
+            # Existing came from play history only (no install yet):
+            # today's overwrite behavior is correct.
             by_thread[tid] = LibraryMatch(
                 **{**existing.__dict__, "install_path": d.install_path,
                    "installed_version": d.installed_version,
