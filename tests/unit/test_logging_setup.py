@@ -19,3 +19,9 @@ def test_configure_logging_writes_to_file(tmp_path: Path) -> None:
 def test_get_logger_returns_module_logger() -> None:
     log = get_logger("vnmaster.foo")
     assert log.name == "vnmaster.foo"
+
+
+def test_configure_logging_can_skip_stderr_handler(tmp_path: Path) -> None:
+    configure_logging(tmp_path / "tui.log", include_stderr=False)
+
+    assert len(logging.getLogger().handlers) == 1

@@ -1,6 +1,7 @@
 """Small, injectable adapter around MEGAcmd's ``mega-get`` command."""
 from __future__ import annotations
 
+import re
 import shutil
 # MEGAcmd is invoked with a fixed argument array, never a shell.
 import subprocess  # nosec B404
@@ -60,12 +61,32 @@ def download_mega(
     result = runner(
         [str(executable), url.strip(), str(destination)],
         check=False,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
+        detail = _command_detail(result)
+        suffix = f": {detail}" if detail else ""
         raise MegaDownloadError(
-            f"mega-get failed with exit status {result.returncode}"
+            f"mega-get failed with exit status {result.returncode}{suffix}"
         )
     downloaded = sorted(destination.iterdir())
     if not downloaded:
         raise MegaDownloadError("mega-get reported success but downloaded no files")
     return downloaded
+
+
+def _command_detail(result: subprocess.CompletedProcess[str]) -> str:
+    output = " ".join(
+        part.strip()
+        for part in (result.stderr, result.stdout)
+        if isinstance(part, str) and part.strip()
+    )
+    concise = " ".join(output.split())
+    redacted = re.sub(
+        r"https://(?:www\.)?mega(?:\.co)?\.nz/\S+",
+        "<MEGA link>",
+        concise,
+        flags=re.I,
+    )
+    return redacted[:500]

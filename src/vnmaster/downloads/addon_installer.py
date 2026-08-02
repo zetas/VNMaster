@@ -57,6 +57,8 @@ def should_install_addon(artifact: PlannedArtifact) -> bool:
     """Return whether an optional artifact is a game-modifying add-on."""
     if artifact.kind != "addon":
         return False
+    if artifact.install_action is not None:
+        return artifact.install_action == "merge"
     searchable = f"{artifact.title} {artifact.group_name}"
     return bool(_INSTALLABLE_RE.search(searchable))
 

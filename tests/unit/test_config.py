@@ -20,6 +20,7 @@ def test_config_loads_valid_toml(monkeypatch, tmp_path: Path) -> None:
     assert cfg.matching.fuzzy_threshold == 90
     assert cfg.downloads.destination == tmp_path / "Games"
     assert cfg.downloads.platform_priority == ["mac", "windows", "linux"]
+    assert cfg.downloads.excluded_hosts == []
     assert cfg.magnitude_score.renders == 1.0
 
 

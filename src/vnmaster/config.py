@@ -12,7 +12,7 @@ import tempfile
 import tomllib
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import tomli_w
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -60,6 +60,24 @@ class MatchingConfig(BaseModel):
     fuzzy_threshold: int = Field(default=85, ge=0, le=100)
 
 
+class ForumParserConfig(BaseModel):
+    """Optional schema-constrained LLM parser for irregular forum posts."""
+
+    enabled: bool = False
+    provider: Literal[
+        "openai", "anthropic", "ollama", "openai_compatible"
+    ] = "openai"
+    model: str = "gpt-5-mini"
+    base_url: str | None = None
+    constraint_mode: Literal["auto", "openai", "vllm", "llama_cpp"] = "auto"
+    timeout_seconds: float = Field(default=120.0, gt=0.0, le=600.0)
+    max_output_tokens: int = Field(default=8192, ge=1024, le=65536)
+    thinking: bool = False
+    merge_strategy: Literal["model", "deterministic"] = "model"
+    max_groups_per_chunk: int = Field(default=10, ge=1, le=50)
+    max_post_chars_per_chunk: int = Field(default=12000, ge=1000, le=100000)
+
+
 class DownloadsConfig(BaseModel):
     """Local download preferences for ``vnmaster fetch``."""
 
@@ -68,6 +86,8 @@ class DownloadsConfig(BaseModel):
         default_factory=lambda: ["mac", "windows", "linux"]
     )
     preferred_hosts: list[str] = Field(default_factory=lambda: ["mega"])
+    excluded_hosts: list[str] = Field(default_factory=list)
+    forum_parser: ForumParserConfig = Field(default_factory=ForumParserConfig)
 
     @field_validator("destination", mode="before")
     @classmethod
@@ -117,6 +137,9 @@ class Secrets(BaseModel):
     discord_bot_token: str
     discord_webhook_url: str | None = None
     anthropic_api_key: str
+    openai_api_key: str | None = None
+    # Optional bearer token for a remote OpenAI-compatible or Ollama server.
+    forum_parser_api_key: str | None = None
     # Raw `Cookie:` header value from a logged-in F95Zone browser session.
     # Required for wizard-time F95Zone search; unused at runtime.
     f95zone_cookies: str | None = None

@@ -128,7 +128,8 @@ def save_install_state(
                 updated_at=now,
             )
             session.add(row)
-        assert row is not None
+        if row is None:
+            raise InstallStateError("Could not initialize the installation state row")
         if part is not None and not created:
             kept_artifacts = [
                 entry

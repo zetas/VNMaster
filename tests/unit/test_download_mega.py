@@ -18,9 +18,11 @@ def test_is_mega_url_accepts_only_https_mega_hosts() -> None:
 def test_download_mega_invokes_command_without_a_shell(tmp_path: Path) -> None:
     destination = tmp_path / "download"
     calls: list[list[str]] = []
+    options: list[dict[str, object]] = []
 
     def runner(args, **kwargs):
         calls.append(args)
+        options.append(kwargs)
         (destination / "game.zip").write_bytes(b"payload")
         return subprocess.CompletedProcess(args, 0)
 
@@ -33,6 +35,7 @@ def test_download_mega_invokes_command_without_a_shell(tmp_path: Path) -> None:
     assert calls == [[
         "/fake/mega-get", "https://mega.nz/file/abc#key", str(destination)
     ]]
+    assert options == [{"check": False, "capture_output": True, "text": True}]
     assert files == [destination / "game.zip"]
 
 
@@ -43,12 +46,18 @@ def test_download_mega_rejects_non_mega_url(tmp_path: Path) -> None:
 
 def test_download_mega_reports_command_failure(tmp_path: Path) -> None:
     def runner(args, **kwargs):
-        return subprocess.CompletedProcess(args, 7)
+        return subprocess.CompletedProcess(
+            args,
+            7,
+            stdout="",
+            stderr="Couldn't find https://mega.nz/file/abc#secret-key",
+        )
 
-    with pytest.raises(MegaDownloadError, match="status 7"):
+    with pytest.raises(MegaDownloadError, match="status 7.*Couldn't find <MEGA link>") as exc:
         download_mega(
             "https://mega.nz/file/abc#key",
             tmp_path / "download",
             executable=Path("/fake/mega-get"),
             runner=runner,
         )
+    assert "secret-key" not in str(exc.value)

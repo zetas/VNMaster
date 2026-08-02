@@ -68,6 +68,39 @@ def test_save_credentials_keeps_webhook_only_in_private_secrets(
     assert secrets_path.stat().st_mode & 0o777 == 0o600
 
 
+def test_save_credentials_preserves_forum_parser_keys(tmp_path: Path) -> None:
+    paths = VNMasterPaths(
+        games_root=tmp_path / "Games",
+        renpy_saves_root=tmp_path / "RenPy",
+        f95checker_db=tmp_path / "f95.db",
+        vnmaster_db=tmp_path / "vnmaster.db",
+        config_dir=tmp_path / "config",
+        log_dir=tmp_path / "logs",
+    )
+    _save_credentials_early(
+        paths=paths,
+        anthropic_key="synthetic-anthropic-key",
+        discord_token="synthetic-discord-token",
+        discord_webhook_url="https://example.invalid/webhook",
+        f95zone_cookies=None,
+        cfg_paths_section={
+            "games_root": "~/Games",
+            "renpy_saves_root": "~/Library/RenPy",
+            "f95checker_db": "~/f95.db",
+            "vnmaster_db": "~/vnmaster.db",
+        },
+        cfg_discord_section={"guild_id": "123", "channel_id": "456"},
+        existing_config={},
+        existing_secrets={
+            "openai_api_key": "synthetic-openai-key",
+            "forum_parser_api_key": "synthetic-local-key",
+        },
+    )
+    secrets = tomllib.loads((paths.config_dir / "secrets.toml").read_text())
+    assert secrets["openai_api_key"] == "synthetic-openai-key"
+    assert secrets["forum_parser_api_key"] == "synthetic-local-key"
+
+
 def test_generate_candidates_orders_by_confidence_then_none_last() -> None:
     candidates = [
         ("none", "Mystery", "no match", "https://f95zone.to/search/?q=mystery"),

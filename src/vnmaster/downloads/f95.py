@@ -7,6 +7,7 @@ from urllib.parse import unquote, urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
+from bs4.element import Tag
 from rapidfuzz import fuzz, process
 
 from vnmaster.downloads.models import (
@@ -29,6 +30,69 @@ _XPATH_LINK_RE = re.compile(
     r"\[(?P<index>\d+)\]$"
 )
 _POST_ID_RE = re.compile(r"/(?:post-|posts/)(\d+)(?:/|$)", re.I)
+_LINKED_DOWNLOAD_PAGE_RE = re.compile(
+    r"\b(?:download|direct\s+link|more\s+info|links?|here|mirror)\b",
+    re.I,
+)
+_MEDIA_ATTACHMENT_SUFFIXES = frozenset(
+    {
+        ".avif",
+        ".bmp",
+        ".gif",
+        ".jpeg",
+        ".jpg",
+        ".m4a",
+        ".mkv",
+        ".mov",
+        ".mp3",
+        ".mp4",
+        ".ogg",
+        ".png",
+        ".svg",
+        ".webm",
+        ".webp",
+        ".wav",
+    }
+)
+_DOWNLOAD_FILE_SUFFIXES = frozenset(
+    {
+        ".7z",
+        ".apk",
+        ".bz2",
+        ".dmg",
+        ".doc",
+        ".docx",
+        ".exe",
+        ".gz",
+        ".pdf",
+        ".rar",
+        ".rpa",
+        ".rtf",
+        ".tar",
+        ".txt",
+        ".xz",
+        ".zip",
+        ".zst",
+    }
+)
+_KNOWN_DOWNLOAD_HOSTS = frozenset(
+    {
+        "buzzheavier.com",
+        "datanodes.to",
+        "drive.google.com",
+        "drive.proton.me",
+        "gofile.io",
+        "mega.nz",
+        "mediafire.com",
+        "mixdrop.ag",
+        "mixdrop.co",
+        "pixeldrain.com",
+        "uploadhaven.com",
+        "vikingfile.com",
+        "wdho.ru",
+        "workupload.com",
+    }
+)
 _F95_TITLE_PREFIX_RE = re.compile(
     r"""
     ^
@@ -217,6 +281,25 @@ def fetch_thread_info(thread_id: int, *, client: httpx.Client) -> ThreadInfo:
     )
 
 
+def fetch_starter_post_text(thread_url: str, *, client: httpx.Client) -> str:
+    """Return readable starter-post text without exposing link targets to an LLM."""
+    response = client.get(
+        thread_url, headers={"Accept": "text/html,application/xhtml+xml"}
+    )
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+    post = soup.select_one("article.message-threadStarterPost .bbWrapper")
+    if post is None:
+        post = soup.select_one("article.message-threadStarterPost")
+    if post is None:
+        raise ThreadMetadataError("F95 thread starter post was not found")
+    for unwanted in post.select("script, style, noscript"):
+        unwanted.decompose()
+    lines = [" ".join(line.split()) for line in post.get_text("\n").splitlines()]
+    text = "\n".join(line for line in lines if line)
+    return re.sub(r"https?://\S+", "[URL REDACTED]", text, flags=re.I)
+
+
 def _expand_extra_post_attachments(
     groups: tuple[DownloadGroup, ...],
     *,
@@ -285,47 +368,248 @@ def _attachment_filename(url: str) -> str:
 def _scrape_thread_download_groups(
     thread_url: str, *, client: httpx.Client
 ) -> tuple[DownloadGroup, ...]:
-    """Recover hand-authored download rows omitted by the structured index."""
+    """Recover hand-authored download rows omitted by the structured index.
+
+    Mod authors commonly publish either ordinary mirror rows, an archive
+    attachment in the first post, or a short link to an updated post/page.
+    Follow only that small, authored chain and never treat screenshots as
+    downloadable add-ons.
+    """
     response = client.get(
         thread_url, headers={"Accept": "text/html,application/xhtml+xml"}
     )
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
-    post = soup.select_one("article.message-threadStarterPost")
+    post = soup.select_one(
+        "article.message-threadStarterPost .bbWrapper, "
+        "article.message-threadStarterPost"
+    )
     if post is None:
         return ()
 
-    found: dict[str, DownloadMirror] = {}
-    for text_node in post.find_all(string=re.compile(r"\bdownloads?\b", re.I)):
-        container = text_node.find_parent(["div", "p", "li", "td"])
-        if container is None:
+    direct = _download_groups_from_container(
+        post, base_url=thread_url, preserve_row_names=False
+    )
+    if direct:
+        return direct
+    return _scrape_linked_download_groups(post, thread_url=thread_url, client=client)
+
+
+def _download_groups_from_container(
+    container: Tag,
+    *,
+    base_url: str,
+    preserve_row_names: bool,
+) -> tuple[DownloadGroup, ...]:
+    """Extract nearby mirror rows and non-media attachment payloads."""
+    rows: list[Tag] = []
+    seen_rows: set[int] = set()
+
+    def add_row(row: Tag | None) -> None:
+        if row is None or id(row) in seen_rows:
+            return
+        seen_rows.add(id(row))
+        rows.append(row)
+
+    for text_node in container.find_all(string=re.compile(r"\bdownloads?\b", re.I)):
+        add_row(text_node.find_parent(["p", "li", "td", "div"]))
+    for anchor in container.select("a[href]"):
+        href = urljoin(base_url, str(anchor.get("href") or ""))
+        if _is_download_attachment(href):
+            add_row(anchor.find_parent(["p", "li", "td", "div"]) or anchor.parent)
+
+    groups: list[DownloadGroup] = []
+    claimed: set[str] = set()
+    for row in rows:
+        row_text = " ".join(row.get_text(" ", strip=True).split())
+        if len(row_text) > 500:
             continue
-        # Avoid treating a whole long post as one download row.
-        if len(container.get_text(" ", strip=True)) > 500:
-            continue
-        for anchor in container.select("a[href]"):
-            href = urljoin(thread_url, str(anchor.get("href") or ""))
-            if not _looks_like_external_download(href):
+        mirrors: list[DownloadMirror] = []
+        for anchor in row.select("a[href]"):
+            href = urljoin(base_url, str(anchor.get("href") or ""))
+            label = anchor.get_text(" ", strip=True)
+            if href in claimed or not _looks_like_direct_download(href, label):
                 continue
-            found.setdefault(
-                href,
-                DownloadMirror(_download_host_name(href, anchor.get_text(" ", strip=True)), href),
+            claimed.add(href)
+            mirrors.append(DownloadMirror(_download_host_name(href, label), href))
+        if not mirrors:
+            continue
+        name = (
+            row_text[:200]
+            if preserve_row_names and row_text
+            else "Thread download links"
+        )
+        groups.append(DownloadGroup(name, tuple(mirrors)))
+
+    # Some OPs attach the mod archive without a nearby "Download" label.
+    for anchor in container.select("a[href]"):
+        href = urljoin(base_url, str(anchor.get("href") or ""))
+        if href in claimed or not _is_download_attachment(href):
+            continue
+        claimed.add(href)
+        filename = _attachment_filename(href)
+        groups.append(
+            DownloadGroup(
+                filename,
+                (DownloadMirror("F95 ATTACHMENT", href),),
             )
-    if not found:
-        return ()
-    return (DownloadGroup("Thread download links", tuple(found.values())),)
+        )
+    return tuple(groups)
 
 
-def _looks_like_external_download(url: str) -> bool:
-    from urllib.parse import urlsplit
+def _scrape_linked_download_groups(
+    post: Tag,
+    *,
+    thread_url: str,
+    client: httpx.Client,
+) -> tuple[DownloadGroup, ...]:
+    """Follow a bounded OP -> same-thread post -> author page chain."""
+    thread_id = extract_thread_id(thread_url)
+    post_urls, page_urls = _related_download_pages(
+        post, base_url=thread_url, thread_id=thread_id
+    )
 
+    for post_url in post_urls[:5]:
+        try:
+            response = client.get(
+                post_url, headers={"Accept": "text/html,application/xhtml+xml"}
+            )
+            response.raise_for_status()
+        except httpx.HTTPError:
+            continue
+        soup = BeautifulSoup(response.text, "html.parser")
+        post_id_match = _POST_ID_RE.search(post_url)
+        linked_post = None
+        if post_id_match is not None:
+            post_id = post_id_match.group(1)
+            linked_post = soup.select_one(
+                f'article.message[data-content="post-{post_id}"], '
+                f"article#js-post-{post_id}"
+            )
+        if linked_post is None:
+            continue
+        direct = _download_groups_from_container(
+            linked_post, base_url=post_url, preserve_row_names=True
+        )
+        if direct:
+            return direct
+        _unused_posts, linked_pages = _related_download_pages(
+            linked_post, base_url=post_url, thread_id=thread_id
+        )
+        page_urls.extend(linked_pages)
+
+    seen_pages: set[str] = set()
+    for page_url in page_urls[:5]:
+        if page_url in seen_pages:
+            continue
+        seen_pages.add(page_url)
+        try:
+            response = client.get(
+                page_url, headers={"Accept": "text/html,application/xhtml+xml"}
+            )
+            response.raise_for_status()
+        except httpx.HTTPError:
+            continue
+        content_type = response.headers.get("content-type", "text/html").casefold()
+        if "html" not in content_type:
+            continue
+        soup = BeautifulSoup(response.text, "html.parser")
+        content = soup.select_one("main article, article, main, body")
+        if content is None:
+            continue
+        direct = _download_groups_from_container(
+            content, base_url=page_url, preserve_row_names=True
+        )
+        if direct:
+            return direct
+    return ()
+
+
+def _related_download_pages(
+    container: Tag,
+    *,
+    base_url: str,
+    thread_id: int | None,
+) -> tuple[list[str], list[str]]:
+    post_urls: list[str] = []
+    page_urls: list[str] = []
+    for anchor in container.select("a[href]"):
+        href = urljoin(base_url, str(anchor.get("href") or ""))
+        if _looks_like_direct_download(href, anchor.get_text(" ", strip=True)):
+            continue
+        parent = anchor.find_parent(["p", "li", "td", "div"])
+        context = " ".join(
+            (
+                anchor.get_text(" ", strip=True),
+                parent.get_text(" ", strip=True)[:300] if parent is not None else "",
+            )
+        )
+        if not _LINKED_DOWNLOAD_PAGE_RE.search(context):
+            continue
+        parsed = urlsplit(href)
+        host = (parsed.hostname or "").casefold()
+        if parsed.scheme != "https" or not host:
+            continue
+        linked_thread_id = extract_thread_id(href)
+        if (
+            host == "f95zone.to"
+            and linked_thread_id == thread_id
+            and _POST_ID_RE.search(href)
+        ):
+            if href not in post_urls:
+                post_urls.append(href)
+            continue
+        if host == "f95zone.to" or host in {
+            "discord.com",
+            "discord.gg",
+            "patreon.com",
+            "www.patreon.com",
+        }:
+            continue
+        if href not in page_urls:
+            page_urls.append(href)
+    return post_urls, page_urls
+
+
+def _looks_like_direct_download(url: str, label: str) -> bool:
+    return is_likely_download_locator(url, label=label)
+
+
+def is_likely_download_locator(locator: str, *, label: str = "") -> bool:
+    """Return whether a registered locator represents a payload, not a page."""
+    if locator.startswith("//a["):
+        return True
+    url = locator
     parsed = urlsplit(url)
     host = (parsed.hostname or "").casefold()
     if parsed.scheme != "https" or not host:
         return False
-    if host in {"docs.google.com", "discord.com", "discord.gg"}:
+    if _is_download_attachment(url):
+        return True
+    if host == "f95zone.to":
+        return "/masked/" in parsed.path.casefold()
+    if host.startswith("www."):
+        host = host[4:]
+    if host in _KNOWN_DOWNLOAD_HOSTS:
+        return True
+    suffix = "." + parsed.path.rsplit(".", 1)[-1].casefold() if "." in parsed.path else ""
+    return suffix in _DOWNLOAD_FILE_SUFFIXES
+
+
+def _is_download_attachment(url: str) -> bool:
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").casefold()
+    if host != "attachments.f95zone.to" and not (
+        host == "f95zone.to" and "/attachments/" in parsed.path.casefold()
+    ):
         return False
-    return host != "f95zone.to" or "/masked/" in parsed.path or "/attachments/" in parsed.path
+    suffix = "." + parsed.path.rsplit(".", 1)[-1].casefold() if "." in parsed.path else ""
+    return suffix not in _MEDIA_ATTACHMENT_SUFFIXES
+
+
+def _looks_like_external_download(url: str) -> bool:
+    """Backward-compatible predicate for tests and callers of the scraper."""
+    return _looks_like_direct_download(url, "")
 
 
 def _download_host_name(url: str, label: str) -> str:

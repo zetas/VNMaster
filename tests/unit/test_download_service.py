@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from vnmaster.downloads.service import (
     execute_download_plan,
     execute_download_plan_detailed,
     execute_multipart_plan,
+    execute_optional_downloads,
 )
 from vnmaster.downloads.urm import URM_RPA_NAME
 
@@ -54,14 +56,7 @@ def test_execute_plan_publishes_atomically_without_manifest(tmp_path: Path) -> N
         return [payload]
 
     def unpacker(downloaded: list[Path], destination: Path) -> None:
-        game_dir = (
-            destination
-            / "A Game.app"
-            / "Contents"
-            / "Resources"
-            / "autorun"
-            / "game"
-        )
+        game_dir = destination / "A Game.app" / "Contents" / "Resources" / "autorun" / "game"
         game_dir.mkdir(parents=True)
         (game_dir / "script.rpyc").write_bytes(b"renpy")
 
@@ -95,6 +90,106 @@ def test_execute_plan_publishes_atomically_without_manifest(tmp_path: Path) -> N
     assert not list(tmp_path.glob(".vnmaster-fetch-*"))
 
 
+def test_execute_plan_handles_model_casing_for_combined_mac_and_pc_bundle(
+    tmp_path: Path,
+) -> None:
+    artifact = replace(_plan().artifacts[0], platform="Mac")
+    plan = DownloadPlan(_plan().game, (artifact,))
+
+    def downloader(_url: str, destination: Path) -> list[Path]:
+        destination.mkdir(parents=True)
+        payload = destination / "game.zip"
+        payload.write_bytes(b"archive")
+        return [payload]
+
+    def unpacker(_downloaded: list[Path], destination: Path) -> None:
+        mac_game = (
+            destination
+            / "A Game.app"
+            / "Contents"
+            / "Resources"
+            / "autorun"
+            / "game"
+        )
+        pc_game = destination / "A Game-pc" / "game"
+        for game_dir in (mac_game, pc_game):
+            game_dir.mkdir(parents=True)
+            (game_dir / "script.rpyc").write_bytes(b"renpy")
+
+    mods_dir = tmp_path / "Mods"
+    mods_dir.mkdir()
+    with zipfile.ZipFile(mods_dir / "_0x52_URM.zip", "w") as bundle:
+        bundle.writestr(URM_RPA_NAME, b"urm")
+
+    execution = execute_download_plan_detailed(
+        plan,
+        resolved_urls=["https://mega.nz/file/abc#key"],
+        destination_root=tmp_path,
+        urm_mods_dir=mods_dir,
+        downloader=downloader,
+        unpacker=unpacker,
+    )
+
+    mac_game = (
+        execution.final_dir
+        / "game"
+        / "A Game.app"
+        / "Contents"
+        / "Resources"
+        / "autorun"
+        / "game"
+    )
+    pc_game = execution.final_dir / "game" / "A Game-pc" / "game"
+    assert (mac_game / URM_RPA_NAME).read_bytes() == b"urm"
+    assert not (pc_game / URM_RPA_NAME).exists()
+    assert execution.renpy_game_dir == Path(
+        "game/A Game.app/Contents/Resources/autorun/game"
+    )
+
+
+def test_execute_plan_keeps_game_when_optional_urm_install_fails(tmp_path: Path) -> None:
+    def downloader(_url: str, destination: Path) -> list[Path]:
+        destination.mkdir(parents=True)
+        payload = destination / "game.zip"
+        payload.write_bytes(b"archive")
+        return [payload]
+
+    def unpacker(_downloaded: list[Path], destination: Path) -> None:
+        game_dir = (
+            destination
+            / "A Game.app"
+            / "Contents"
+            / "Resources"
+            / "autorun"
+            / "game"
+        )
+        game_dir.mkdir(parents=True)
+        (game_dir / "script.rpyc").write_bytes(b"renpy")
+
+    mods_dir = tmp_path / "Mods"
+    mods_dir.mkdir()
+    messages: list[str] = []
+
+    execution = execute_download_plan_detailed(
+        _plan(),
+        resolved_urls=["https://mega.nz/file/abc#key"],
+        destination_root=tmp_path,
+        urm_mods_dir=mods_dir,
+        downloader=downloader,
+        unpacker=unpacker,
+        reporter=messages.append,
+    )
+
+    assert (execution.final_dir / "archive" / "game.zip").read_bytes() == b"archive"
+    assert (execution.final_dir / "game" / "A Game.app").is_dir()
+    assert [(failure.part, failure.kind) for failure in execution.failures] == [
+        ("URM", "addon")
+    ]
+    assert any("Optional URM installation failed" in message for message in messages)
+    assert any("Published completed download" in message for message in messages)
+    assert not list(tmp_path.glob(".vnmaster-fetch-*"))
+
+
 def test_execute_plan_falls_back_to_next_mirror(tmp_path: Path) -> None:
     plan = _plan()
     artifact = plan.artifacts[0]
@@ -104,9 +199,7 @@ def test_execute_plan_falls_back_to_next_mirror(tmp_path: Path) -> None:
             PlannedArtifact(
                 **{
                     **artifact.__dict__,
-                    "alternate_mirrors": (
-                        DownloadMirror("GOFILE", "https://gofile.io/d/good"),
-                    ),
+                    "alternate_mirrors": (DownloadMirror("GOFILE", "https://gofile.io/d/good"),),
                 }
             ),
         ),
@@ -133,9 +226,7 @@ def test_execute_plan_falls_back_to_next_mirror(tmp_path: Path) -> None:
         plan,
         resolved_downloads=[
             (
-                ResolvedDownload(
-                    "MEGA", artifact.locator, "https://mega.nz/file/bad#key"
-                ),
+                ResolvedDownload("MEGA", artifact.locator, "https://mega.nz/file/bad#key"),
                 ResolvedDownload(
                     "GOFILE",
                     "https://gofile.io/d/good",
@@ -250,11 +341,7 @@ def test_execute_plan_applies_selected_multifile_mod(tmp_path: Path) -> None:
     assert (installed_game / "code" / "scene.rpyc").read_bytes() == b"modded"
     assert (installed_game / "gui" / "cheat.png").read_bytes() == b"new"
     assert (
-        execution.final_dir
-        / "archive"
-        / "addons"
-        / "02-A Game Multi-Mod"
-        / "mod.zip"
+        execution.final_dir / "archive" / "addons" / "02-A Game Multi-Mod" / "mod.zip"
     ).read_bytes() == b"archive"
     assert execution.artifacts[1].addon_merge is not None
     assert execution.artifacts[1].addon_merge.files_overwritten == 1
@@ -422,6 +509,32 @@ def test_multipart_publishes_each_part_into_its_own_dir(tmp_path: Path) -> None:
     assert [r.final_dir.name for r in result.completed] == ["Part 1", "Part 2"]
     assert (result.version_root / "Part 1" / "game").is_dir()
     assert (result.version_root / "Part 2" / "game").is_dir()
+    assert len(result.completed[0].artifacts) == 2
+    assert len(result.completed[1].artifacts) == 1
+
+
+def test_multipart_range_addon_applies_to_each_eligible_part(tmp_path: Path) -> None:
+    base = _part_plan()
+    plan = DownloadPlan(
+        base.game,
+        (
+            base.artifacts[0],
+            replace(base.artifacts[1], part="Part 6"),
+            replace(base.artifacts[2], part="Part 2+"),
+        ),
+    )
+    result = execute_multipart_plan(
+        plan,
+        resolved_urls=[
+            "https://example.com/part1",
+            "https://example.com/part6",
+            "https://example.com/patch",
+        ],
+        destination_root=tmp_path,
+        downloader=_multipart_downloader,
+        unpacker=_multipart_unpacker,
+    )
+    assert [len(item.artifacts) for item in result.completed] == [1, 2]
 
 
 def test_multipart_requires_part_label_on_every_game(tmp_path: Path) -> None:
@@ -463,6 +576,86 @@ def test_multipart_second_part_failure_keeps_the_first(tmp_path: Path) -> None:
     assert (result.version_root / "Part 1" / "game").is_dir()
 
 
+def test_multipart_failed_optional_keeps_game_and_successful_optionals(
+    tmp_path: Path,
+) -> None:
+    base = _part_plan()
+    good = replace(
+        base.artifacts[2],
+        title="Incest Patch Part 2+",
+        part="Part 1",
+        install_action="merge",
+    )
+    bad = replace(
+        good,
+        title="Walkthrough Mod",
+        locator="https://f95zone.to/masked/vikingfile.com/walkthrough",
+    )
+    plan = DownloadPlan(base.game, (base.artifacts[0], good, bad))
+    messages: list[str] = []
+
+    def downloader(url: str, destination: Path) -> list[Path]:
+        if url.endswith("walkthrough"):
+            raise RuntimeError("browser confirmation required")
+        return _multipart_downloader(url, destination)
+
+    def unpacker(downloaded: list[Path], destination: Path) -> None:
+        source_url = downloaded[0].read_text()
+        if source_url.endswith("part1"):
+            game_dir = destination / "A Game-pc" / "game"
+            game_dir.mkdir(parents=True)
+            (game_dir / "script.rpyc").write_bytes(b"game")
+            return
+        patch_dir = destination / "Incest Patch" / "game"
+        patch_dir.mkdir(parents=True)
+        (patch_dir / "taboo_patch.rpyc").write_bytes(b"patch")
+
+    result = execute_multipart_plan(
+        plan,
+        resolved_urls=[
+            "https://example.com/part1",
+            "https://example.com/patch",
+            "https://example.com/walkthrough",
+        ],
+        destination_root=tmp_path,
+        downloader=downloader,
+        unpacker=unpacker,
+        reporter=messages.append,
+    )
+
+    assert [item.final_dir.name for item in result.completed] == ["Part 1"]
+    assert len(result.failures) == 1
+    assert result.failures[0].kind == "addon"
+    assert result.failures[0].part == "Walkthrough Mod"
+    assert "browser confirmation required" in result.failures[0].error
+    part_dir = result.version_root / "Part 1"
+    installed_game = part_dir / "game" / "A Game-pc" / "game"
+    assert (installed_game / "script.rpyc").exists()
+    assert (installed_game / "taboo_patch.rpyc").read_bytes() == b"patch"
+    assert (part_dir / "addons" / "Incest Patch Part 2").is_dir()
+    assert not (part_dir / "addons" / "Walkthrough Mod").exists()
+    assert any("continuing so completed items can still be kept" in item for item in messages)
+    assert any("Published completed download" in item for item in messages)
+
+
+def test_multipart_all_failures_do_not_leave_empty_version_root(tmp_path: Path) -> None:
+    def downloader(_url: str, _destination: Path) -> list[Path]:
+        raise RuntimeError("offline")
+
+    result = execute_multipart_plan(
+        _part_plan(),
+        resolved_urls=[
+            "https://example.com/part1",
+            "https://example.com/part2",
+            "https://example.com/patch",
+        ],
+        destination_root=tmp_path,
+        downloader=downloader,
+        unpacker=_multipart_unpacker,
+    )
+    assert not result.version_root.exists()
+
+
 def test_multipart_on_part_complete_fires_per_part(tmp_path: Path) -> None:
     seen: list[str] = []
     execute_multipart_plan(
@@ -500,9 +693,7 @@ def test_multipart_refetch_replaces_only_the_chosen_part(tmp_path: Path) -> None
         downloader=_multipart_downloader,
         unpacker=make_unpacker(b"v1"),
     )
-    part1_before = (
-        result.version_root / "Part 1" / "game" / "script.rpyc"
-    ).read_bytes()
+    part1_before = (result.version_root / "Part 1" / "game" / "script.rpyc").read_bytes()
 
     part2_only = DownloadPlan(
         plan.game,
@@ -517,9 +708,74 @@ def test_multipart_refetch_replaces_only_the_chosen_part(tmp_path: Path) -> None
     )
 
     assert refetch_result.version_root == result.version_root
+    assert (result.version_root / "Part 1" / "game" / "script.rpyc").read_bytes() == part1_before
+    assert (result.version_root / "Part 2" / "game" / "script.rpyc").read_bytes() == b"v2"
+
+
+def test_optional_only_download_is_scoped_and_does_not_create_a_game(
+    tmp_path: Path,
+) -> None:
+    addon = replace(
+        _plan().artifacts[0],
+        kind="addon",
+        title="Walkthrough Mod",
+        part="Part 7",
+        install_action="merge",
+    )
+    plan = DownloadPlan(_plan().game, (addon,))
+    messages: list[str] = []
+
+    result = execute_optional_downloads(
+        plan,
+        resolved_urls=["https://example.com/mod.zip"],
+        destination_root=tmp_path,
+        downloader=_multipart_downloader,
+        unpacker=_multipart_unpacker,
+        reporter=messages.append,
+    )
+
+    expected = tmp_path / "A Game" / "v1.2" / "Part 7" / "addons" / "Walkthrough Mod"
+    assert result.completed == (expected,)
+    assert result.failures == ()
+    assert (expected / "script.rpyc").exists()
     assert (
-        result.version_root / "Part 1" / "game" / "script.rpyc"
-    ).read_bytes() == part1_before
-    assert (
-        result.version_root / "Part 2" / "game" / "script.rpyc"
-    ).read_bytes() == b"v2"
+        tmp_path
+        / "A Game"
+        / "v1.2"
+        / "Part 7"
+        / "archive"
+        / "addons"
+        / "Walkthrough Mod"
+        / "payload.zip"
+    ).exists()
+    assert not (tmp_path / "A Game" / "v1.2" / "Part 7" / "game").exists()
+    assert any("game files were not modified" in message for message in messages)
+    assert not list(tmp_path.glob(".vnmaster-optionals-*"))
+
+
+def test_optional_only_failure_does_not_discard_a_successful_sibling(
+    tmp_path: Path,
+) -> None:
+    base = _plan().artifacts[0]
+    good = replace(base, kind="addon", title="Walkthrough PDF")
+    bad = replace(base, kind="addon", title="Walkthrough Mod")
+    plan = DownloadPlan(_plan().game, (good, bad))
+
+    def downloader(url: str, destination: Path) -> list[Path]:
+        if url.endswith("bad"):
+            raise RuntimeError("browser confirmation required")
+        return _multipart_downloader(url, destination)
+
+    result = execute_optional_downloads(
+        plan,
+        resolved_urls=["https://example.com/good", "https://example.com/bad"],
+        destination_root=tmp_path,
+        downloader=downloader,
+        unpacker=_multipart_unpacker,
+    )
+
+    assert len(result.completed) == 1
+    assert result.completed[0].name == "Walkthrough PDF"
+    assert len(result.failures) == 1
+    assert result.failures[0].part == "Walkthrough Mod"
+    assert "browser confirmation required" in result.failures[0].error

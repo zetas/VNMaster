@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -31,12 +32,24 @@ def install_urm_mod(
 
     archive, member = _find_urm_payload(mods_dir)
     target = target_dir / URM_RPA_NAME
+    temporary: Path | None = None
     try:
         with zipfile.ZipFile(archive) as bundle:
-            with bundle.open(member) as source, target.open("wb") as destination:
-                shutil.copyfileobj(source, destination)
+            with bundle.open(member) as source:
+                with tempfile.NamedTemporaryFile(
+                    mode="wb",
+                    dir=target_dir,
+                    prefix=".vnmaster-urm-",
+                    delete=False,
+                ) as destination:
+                    temporary = Path(destination.name)
+                    shutil.copyfileobj(source, destination)
+        temporary.replace(target)
     except (OSError, KeyError, zipfile.BadZipFile) as exc:
         raise UrmInstallError(f"Could not extract URM from {archive}: {exc}") from exc
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return target
 
 

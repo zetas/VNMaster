@@ -331,6 +331,7 @@ def run_wizard(paths: VNMasterPaths) -> None:
             "channel_id": str(channel_id),
         },
         existing_config=existing_config,
+        existing_secrets=existing_secrets,
     )
     click.echo(
         f"Credentials saved to {paths.config_dir / 'secrets.toml'}. "
@@ -634,6 +635,7 @@ def _save_credentials_early(
     cfg_paths_section: dict[str, Any],
     cfg_discord_section: dict[str, Any],
     existing_config: dict[str, Any],
+    existing_secrets: dict[str, Any] | None = None,
 ) -> None:
     """Persist secrets.toml + config.toml as soon as credentials validate.
 
@@ -669,6 +671,7 @@ def _save_credentials_early(
 
     secrets_path = paths.config_dir / "secrets.toml"
     secrets_dict = {
+        **(existing_secrets or {}),
         "discord_bot_token": discord_token,
         "discord_webhook_url": discord_webhook_url,
         "anthropic_api_key": anthropic_key,

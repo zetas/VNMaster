@@ -8,6 +8,7 @@ import pytest
 from vnmaster.downloads.f95 import (
     AmbiguousGameError,
     extract_thread_id,
+    fetch_starter_post_text,
     fetch_thread_info,
     resolve_game,
     resolve_redacted_locator,
@@ -22,6 +23,24 @@ def test_extract_thread_id_accepts_canonical_and_short_urls() -> None:
     assert extract_thread_id("https://f95zone.to/threads/.12345/") == 12345
     assert extract_thread_id("12345") == 12345
     assert extract_thread_id("Eternum") is None
+
+
+def test_starter_post_text_redacts_visible_urls() -> None:
+    html = """
+    <article class="message-threadStarterPost">
+      <div class="bbWrapper">
+        Part 1 <a href="https://mega.nz/file/secret">https://mega.nz/file/secret</a>
+        <script>https://example.invalid/script</script>
+      </div>
+    </article>
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=html)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        text = fetch_starter_post_text("https://f95zone.to/threads/.1/", client=client)
+    assert text == "Part 1\n[URL REDACTED]"
 
 
 def test_resolve_game_prefers_exact_title() -> None:
@@ -198,6 +217,77 @@ def test_fetch_thread_info_recovers_download_row_when_index_is_empty() -> None:
     assert [mirror.name for mirror in info.downloads[0].mirrors] == [
         "GOOGLE DRIVE",
         "MEGA",
+    ]
+
+
+def test_fetch_thread_info_uses_mod_attachment_but_ignores_screenshots() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/full/99":
+            return httpx.Response(
+                200,
+                json={"name": "A Game Walkthrough Mod", "version": "v1", "downloads": []},
+            )
+        return httpx.Response(
+            200,
+            text=(
+                '<article class="message-threadStarterPost"><div class="bbWrapper">'
+                '<a href="https://attachments.f95zone.to/2026/07/1_preview.jpg">pic</a>'
+                '<a href="https://attachments.f95zone.to/2026/07/2_mod-v1.2.zip">mod</a>'
+                "</div></article>"
+            ),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        info = fetch_thread_info(99, client=client)
+    assert len(info.downloads) == 1
+    assert [mirror.locator for mirror in info.downloads[0].mirrors] == [
+        "https://attachments.f95zone.to/2026/07/2_mod-v1.2.zip"
+    ]
+
+
+def test_fetch_thread_info_follows_linked_mod_post_and_author_download_page() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/full/99":
+            return httpx.Response(
+                200,
+                json={"name": "A Game Walkthrough Mod", "version": "v1", "downloads": []},
+            )
+        if request.url.path == "/threads/.99/":
+            return httpx.Response(
+                200,
+                text=(
+                    '<article class="message-threadStarterPost"><div class="bbWrapper">'
+                    'Download information moved <a href="/threads/mod.99/post-123">here</a>.'
+                    "</div></article>"
+                ),
+            )
+        if request.url.path == "/threads/mod.99/post-123":
+            return httpx.Response(
+                200,
+                text=(
+                    '<article class="message" data-content="post-123">'
+                    'Use <a href="https://mods.example/current/">the direct link</a>.'
+                    "</article>"
+                ),
+            )
+        assert request.url == "https://mods.example/current/"
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/html"},
+            text=(
+                "<main><article><p>Download WT Mod v1.2 "
+                '<a href="https://vikingfile.com/f/current">VikingFile</a> '
+                '<a href="https://www.mediafire.com/file/mod-v1.2.zip/file">MediaFire</a>'
+                "</p></article></main>"
+            ),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        info = fetch_thread_info(99, client=client)
+    assert info.downloads[0].name.startswith("Download WT Mod v1.2")
+    assert [mirror.name for mirror in info.downloads[0].mirrors] == [
+        "VikingFile",
+        "MediaFire",
     ]
 
 

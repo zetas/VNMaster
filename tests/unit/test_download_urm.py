@@ -111,3 +111,29 @@ def test_install_urm_requires_zip_containing_rpa(tmp_path: Path) -> None:
 
     with pytest.raises(UrmInstallError, match="No ZIP containing"):
         install_urm_mod(game_root, mods_dir, platform="windows")
+
+
+def test_failed_urm_copy_does_not_publish_a_partial_mod(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    game_root = tmp_path / "extracted"
+    target_dir = game_root / "game"
+    target_dir.mkdir(parents=True)
+    (target_dir / "script.rpyc").write_bytes(b"renpy")
+    target = target_dir / URM_RPA_NAME
+    target.write_bytes(b"existing")
+    mods_dir = tmp_path / "Mods"
+    _write_urm_zip(mods_dir, payload=b"replacement")
+
+    def fail_after_partial_copy(_source, destination) -> None:
+        destination.write(b"partial")
+        raise OSError("disk full")
+
+    monkeypatch.setattr("vnmaster.downloads.urm.shutil.copyfileobj", fail_after_partial_copy)
+
+    with pytest.raises(UrmInstallError, match="disk full"):
+        install_urm_mod(game_root, mods_dir, platform="windows")
+
+    assert target.read_bytes() == b"existing"
+    assert not list(target_dir.glob(".vnmaster-urm-*"))

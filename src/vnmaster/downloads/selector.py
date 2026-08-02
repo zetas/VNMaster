@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import unquote, urlsplit
 
 from vnmaster.downloads.models import (
     DetectedPart,
@@ -24,6 +25,7 @@ _ADDON_RE = re.compile(
 _REJECT_GAME_GROUP_RE = re.compile(r"android|compressed|update|patch|hotfix", re.I)
 _REJECT_ADDON_GROUP_RE = re.compile(r"android|compressed", re.I)
 _OPTIONAL_GROUP_RE = _ADDON_RE
+_ADDON_VERSION_RE = re.compile(r"\bv?(\d+(?:\.\d+)+(?:[a-z][a-z0-9]*)?)", re.I)
 
 # Priority order for ties; aliases fold into one family.
 _PART_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -210,6 +212,7 @@ def build_download_plan(
     allow_host_fallback: bool = True,
     detection: PartDetection | None = None,
     selected_parts: tuple[int, ...] | None = None,
+    include_addons: bool = True,
 ) -> DownloadPlan:
     skipped: list[SkippedArtifact] = []
     if detection is not None and detection.is_multipart:
@@ -226,20 +229,24 @@ def build_download_plan(
                 game, platform_priority, preferred_hosts, allow_host_fallback
             )
         ]
-    selected: list[PlannedArtifact] = [
-        *game_artifacts,
-        *_select_embedded_addons(
-            game, game_artifacts, preferred_hosts,
-            detection=detection, selected_parts=selected_parts,
-        ),
-    ]
+    selected: list[PlannedArtifact] = [*game_artifacts]
+    if include_addons:
+        selected.extend(
+            _select_embedded_addons(
+                game,
+                game_artifacts,
+                preferred_hosts,
+                detection=detection,
+                selected_parts=selected_parts,
+            )
+        )
 
-    for addon in addons:
+    for addon in addons if include_addons else []:
         compatible, reason = addon_matches_game(game, addon)
         if not compatible:
             skipped.append(SkippedArtifact(addon.title, reason))
             continue
-        artifact = _select_addon_artifact(
+        artifact = select_addon_artifact(
             addon,
             preferred_hosts,
             warning=reason or None,
@@ -371,7 +378,7 @@ def _select_part_artifacts(
     return artifacts, skipped
 
 
-def _select_addon_artifact(
+def select_addon_artifact(
     addon: ThreadInfo,
     preferred_hosts: list[str],
     *,
@@ -389,7 +396,7 @@ def _select_addon_artifact(
         return PlannedArtifact(
             kind="addon",
             title=addon.title,
-            version=addon.version,
+            version=_addon_version(addon, group),
             thread_id=addon.thread_id,
             thread_url=addon.url,
             group_name=group.name,
@@ -400,6 +407,17 @@ def _select_addon_artifact(
             alternate_mirrors=tuple(alternates),
         )
     return None
+
+
+def _addon_version(addon: ThreadInfo, group: DownloadGroup) -> str | None:
+    """Prefer a selected payload's version over a stale add-on thread title."""
+    candidates = [group.name]
+    candidates.extend(unquote(urlsplit(mirror.locator).path) for mirror in group.mirrors)
+    for candidate in candidates:
+        match = _ADDON_VERSION_RE.search(candidate)
+        if match is not None:
+            return f"v{match.group(1)}"
+    return addon.version
 
 
 def _select_embedded_addons(
@@ -431,6 +449,11 @@ def _select_embedded_addons(
             if len(found) == 1 and "-" not in found[0]:
                 part_number = int(found[0])
                 part_label = f"{detection.family.capitalize()} {part_number}"
+            elif detection.family == "part":
+                compact = re.findall(r"p(\d{1,3})(?=\D|$)", group.name, re.I)
+                if len(set(compact)) == 1:
+                    part_number = int(compact[0])
+                    part_label = f"Part {part_number}"
         if (
             detection is not None
             and detection.is_multipart
@@ -468,14 +491,31 @@ def _ordered_mirrors(
     preferred_hosts: list[str],
     allow_host_fallback: bool,
 ) -> tuple[DownloadMirror, ...]:
+    eligible = tuple(
+        mirror
+        for mirror in group.mirrors
+        if not _is_forum_landing_page(mirror.locator)
+    )
     preferred: list[DownloadMirror] = []
     for host in preferred_hosts:
-        for mirror in group.mirrors:
+        for mirror in eligible:
             if host.casefold() in mirror.name.casefold() and mirror not in preferred:
                 preferred.append(mirror)
     if not allow_host_fallback:
         return tuple(preferred)
-    return (*preferred, *(mirror for mirror in group.mirrors if mirror not in preferred))
+    return (*preferred, *(mirror for mirror in eligible if mirror not in preferred))
+
+
+def _is_forum_landing_page(locator: str) -> bool:
+    if locator.startswith("//a["):
+        return False
+    try:
+        parsed = urlsplit(locator)
+    except ValueError:
+        return False
+    return (parsed.hostname or "").casefold() == "f95zone.to" and bool(
+        re.search(r"/(?:threads|posts|post-)/?", parsed.path, re.I)
+    )
 
 
 def _group_matches_platform(group_name: str, platform: str) -> bool:
