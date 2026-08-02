@@ -629,6 +629,6 @@ def _candidate_label(candidate: ResolvedDownload) -> str:
 
 
 def _safe_component(value: str) -> str:
-    cleaned = re.sub(r"[^\w. -]+", "-", value, flags=re.UNICODE)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .-")
+    cleaned = re.sub(r"[^\w.' -]+", "-", value, flags=re.UNICODE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .-'")
     return cleaned[:120] or "unnamed"
