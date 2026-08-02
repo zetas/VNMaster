@@ -196,6 +196,12 @@ The existing `vnmaster fetch` command remains available for scripting and dry
 runs; its `--host` option continues to change ordering without excluding
 fallbacks.
 
+When F95 requires its outbound-link interstitial, VNMaster opens that page in
+the default browser. On macOS with Zen, **Capture Zen URL** reads only a matching
+provider visit created after the handoff began and fills the URL field for
+review; it never reads browser cookies or starts the download automatically.
+Manual paste remains available for other browsers.
+
 For a normal fetch, use ↑/↓ to move through optional downloads, Space to toggle
 choices, and Enter to continue. In a non-interactive shell, the fallback prompt
 accepts comma-separated numbers or ranges such as `1,3-5`, `all`, or an empty

@@ -12,6 +12,7 @@ from textual.widgets import Button, Checkbox, Footer, Input, RichLog, SelectionL
 from vnmaster.downloads.fetch_session import (
     FetchRunResult,
     FetchSnapshot,
+    ProtectedDownload,
     ResolutionResult,
 )
 from vnmaster.downloads.f95 import AmbiguousGameError
@@ -28,7 +29,7 @@ from vnmaster.downloads.workflow import ThreadDiscovery
 from vnmaster.f95_search import F95SearchHit
 from vnmaster.logging_setup import get_logger
 from vnmaster.paths import VNMasterPaths
-from vnmaster.tui import VNMasterApp, _activity_text, run_tui
+from vnmaster.tui import BrowserHandoffScreen, VNMasterApp, _activity_text, run_tui
 
 
 def _artifact(
@@ -345,6 +346,38 @@ def test_activity_messages_have_distinct_visual_levels() -> None:
     assert any(str(span.style) == "bold green" for span in success.spans)
     assert any(str(span.style) == "bold yellow" for span in warning.spans)
     assert any(str(span.style) == "bold red" for span in error.spans)
+
+
+@pytest.mark.asyncio
+async def test_browser_handoff_captures_zen_url_for_review(monkeypatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr("vnmaster.tui.zen_history_available", lambda: True)
+    monkeypatch.setattr(
+        "vnmaster.tui.capture_recent_provider_url",
+        lambda _provider, *, since_us: "https://gofile.io/d/captured",
+    )
+    monkeypatch.setattr("vnmaster.tui.webbrowser.open", opened.append)
+    protected = ProtectedDownload(
+        0,
+        "A Game",
+        DownloadMirror("GOFILE", "https://f95zone.to/masked/gofile.io/example"),
+        "https://f95zone.to/masked/gofile.io/example",
+    )
+    app = VNMasterApp(backend=FakeBackend())
+
+    async with app.run_test(size=(150, 52)) as pilot:
+        screen = BrowserHandoffScreen(protected)
+        app.push_screen(screen)
+        await pilot.pause()
+        await pilot.click("#open-handoff")
+        await pilot.click("#capture-handoff")
+        await pilot.pause()
+
+        assert opened == [protected.protected_url]
+        assert screen.query_one("#handoff-url", Input).value == (
+            "https://gofile.io/d/captured"
+        )
+        assert app.screen is screen
 
 
 @pytest.mark.asyncio
