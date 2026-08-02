@@ -27,7 +27,7 @@ from vnmaster.downloads.models import ThreadInfo
 from vnmaster.llm.structured import StructuredOutputError
 
 
-PROMPT_VERSION = 5
+PROMPT_VERSION = 6
 _ADDON_TITLE_RE = re.compile(
     r"\b(?:walk\s*-?\s*through|mod|patch|hotfix|chart|profile|save|"
     r"translation|\btl\b|compressed|android)\b",
@@ -510,5 +510,9 @@ _OUTPUT_RULES = [
     "use mirror_group 'unresolved' instead of forcing uncertain links together",
     "a forum thread, homepage, or instructions page is delivery manual and action manual",
     "mods and patches that copy into a game use merge; documents use separate",
+    (
+        "a plus sign in a part label is literal ambiguous punctuation, not proof "
+        "that an add-on applies to every later part; never expand it as a range"
+    ),
     "all fields are required; use null or empty lists when information is absent",
 ]

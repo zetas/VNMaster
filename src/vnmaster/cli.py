@@ -652,7 +652,7 @@ def fetch(
     import httpx
 
     from vnmaster.config import Secrets
-    from vnmaster.downloads.downloader import is_url_for_host
+    from vnmaster.downloads.downloader import download_artifact_url, is_url_for_host
     from vnmaster.downloads.f95 import (
         AmbiguousGameError,
         fetch_starter_post_text,
@@ -674,11 +674,29 @@ def fetch(
     )
     from vnmaster.f95_search import build_search_client
     from vnmaster.llm.forum_manifest import ForumManifestInterpreter
+    from vnmaster.llm.payload_selection import ConfiguredPayloadSelector
     from vnmaster.llm.structured import StructuredOutputClient
 
     paths, cfg, engine = _load_engine_and_paths(config_path)
     secrets = Secrets.load(paths.config_dir / "secrets.toml")
     destination = destination or cfg.downloads.destination
+    payload_selector = ConfiguredPayloadSelector(
+        cfg.downloads.forum_parser,
+        secrets,
+        reporter=click.echo,
+    )
+
+    def _download_artifact(
+        artifact: PlannedArtifact,
+        url: str,
+        target: Path,
+    ) -> list[Path]:
+        return download_artifact_url(
+            artifact,
+            url,
+            target,
+            payload_selector=payload_selector,
+        )
 
     try:
         with build_search_client(cookie_header=secrets.f95zone_cookies) as client:
@@ -956,6 +974,7 @@ def fetch(
                 urm_mods_dir=cfg.paths.games_root / "Mods",
                 reporter=click.echo,
                 on_part_complete=_record,
+                artifact_downloader=_download_artifact,
             )
             for part_result in result.completed:
                 click.echo(f"Ready: {part_result.final_dir}")
@@ -985,6 +1004,7 @@ def fetch(
             destination_root=destination.expanduser(),
             urm_mods_dir=cfg.paths.games_root / "Mods",
             reporter=click.echo,
+            artifact_downloader=_download_artifact,
         )
         state = save_install_state(engine, execution, reporter=click.echo)
     except click.ClickException:

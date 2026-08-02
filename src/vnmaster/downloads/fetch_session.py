@@ -14,7 +14,7 @@ from sqlalchemy import Engine
 
 from vnmaster.config import Config, Secrets
 from vnmaster.db.engine import create_engine_for, ensure_schema
-from vnmaster.downloads.downloader import is_url_for_host
+from vnmaster.downloads.downloader import download_artifact_url, is_url_for_host
 from vnmaster.downloads.f95 import fetch_starter_post_text, resolve_redacted_locator
 from vnmaster.downloads.manifest import (
     DownloadManifest,
@@ -25,6 +25,7 @@ from vnmaster.downloads.models import (
     DownloadMirror,
     DownloadPlan,
     PartDetection,
+    PlannedArtifact,
     ResolvedDownload,
 )
 from vnmaster.downloads.selector import detect_parts
@@ -42,6 +43,7 @@ from vnmaster.downloads.workflow import (
 )
 from vnmaster.f95_search import build_search_client
 from vnmaster.llm.forum_manifest import ForumManifestInterpreter
+from vnmaster.llm.payload_selection import ConfiguredPayloadSelector
 from vnmaster.llm.structured import StructuredOutputClient
 from vnmaster.paths import VNMasterPaths
 
@@ -136,6 +138,24 @@ class VNMasterFetchBackend:
         self.destination = (destination or self.config.downloads.destination).expanduser()
         self.excluded_hosts = tuple(self.config.downloads.excluded_hosts)
         self._reporter = reporter
+        self._payload_selector = ConfiguredPayloadSelector(
+            self.config.downloads.forum_parser,
+            self.secrets,
+            reporter=reporter,
+        )
+
+    def _download_artifact(
+        self,
+        artifact: PlannedArtifact,
+        url: str,
+        destination: Path,
+    ) -> list[Path]:
+        return download_artifact_url(
+            artifact,
+            url,
+            destination,
+            payload_selector=self._payload_selector,
+        )
 
     def discover(self, query: str, *, include_addons: bool = True) -> FetchSnapshot:
         with build_search_client(cookie_header=self.secrets.f95zone_cookies) as client:
@@ -307,6 +327,7 @@ class VNMasterFetchBackend:
                 resolved_downloads=candidate_list,
                 destination_root=self.destination,
                 reporter=self._reporter,
+                artifact_downloader=self._download_artifact,
             )
             return FetchRunResult(
                 final_dirs=optional_result.completed,
@@ -338,6 +359,7 @@ class VNMasterFetchBackend:
                 urm_mods_dir=self.config.paths.games_root / "Mods",
                 reporter=self._reporter,
                 on_part_complete=record,
+                artifact_downloader=self._download_artifact,
             )
             return FetchRunResult(
                 final_dirs=tuple(item.final_dir for item in result.completed),
@@ -358,6 +380,7 @@ class VNMasterFetchBackend:
             destination_root=self.destination,
             urm_mods_dir=self.config.paths.games_root / "Mods",
             reporter=self._reporter,
+            artifact_downloader=self._download_artifact,
         )
         state = save_install_state(self.engine, execution, reporter=self._reporter)
         return FetchRunResult(

@@ -350,7 +350,7 @@ def test_manual_forum_page_is_skipped_not_downloaded() -> None:
     assert "manual" in plan.skipped[0].reason
 
 
-def test_manual_patch_with_platform_mirrors_is_restored_as_download() -> None:
+def test_incremental_update_patch_is_not_offered_with_full_build() -> None:
     base = _thread()
     thread = replace(
         base,
@@ -410,11 +410,9 @@ def test_manual_patch_with_platform_mirrors_is_restored_as_download() -> None:
         selected_parts=(7,),
         include_addons=True,
     )
-    patch = next(artifact for artifact in plan.artifacts if artifact.title == "Update Patch")
-    assert patch.platform == "mac"
-    assert patch.host == "MEGA"
-    assert len(patch.alternate_mirrors) == 1
-    assert patch.install_action == "merge"
+    assert all(artifact.title != "Update Patch" for artifact in plan.artifacts)
+    skipped = next(item for item in plan.skipped if item.title == "Update Patch")
+    assert "incremental update" in skipped.reason
 
 
 def test_linked_forum_mod_is_replaced_with_child_thread_downloads() -> None:
@@ -473,7 +471,7 @@ def test_linked_forum_mod_is_replaced_with_child_thread_downloads() -> None:
     assert all(skipped.title != "Walkthrough mod" for skipped in part_6_plan.skipped)
 
 
-def test_part_labels_filter_part_specific_patches() -> None:
+def test_plus_part_label_does_not_expand_to_later_parts() -> None:
     base = _thread()
     thread = replace(
         base,
@@ -527,7 +525,7 @@ def test_part_labels_filter_part_specific_patches() -> None:
         for artifact in plan.artifacts
         if artifact.title.startswith("Incest Patch")
     ]
-    assert patches == ["Incest Patch Part 2+"]
+    assert patches == []
 
 
 def test_part_detection_comes_from_manifest_not_group_regexes() -> None:

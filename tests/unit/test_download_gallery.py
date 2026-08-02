@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from vnmaster.downloads.gallery import (
+    GalleryCandidate,
     GalleryDownloadError,
     download_gallery,
+    inspect_gallery,
     is_gallery_url,
 )
 
@@ -30,6 +33,60 @@ def test_download_gallery_returns_all_downloaded_files(tmp_path: Path) -> None:
         "https://gofile.io/d/abc", tmp_path / "download", runner=runner
     )
     assert downloaded == [tmp_path / "download" / "nested" / "game.zip"]
+
+
+def test_inspect_gallery_returns_inert_file_metadata() -> None:
+    metadata = [
+        [1, {"category": "gofile"}],
+        [
+            3,
+            "https://download.example/secret",
+            {
+                "num": 2,
+                "filename": "A Game-1.2-mac",
+                "extension": "zip",
+                "size": 1234,
+            },
+        ],
+        [
+            3,
+            "https://download.example/other",
+            {
+                "num": 5,
+                "filename": "A Game-1.2-pc.zip",
+                "extension": "zip",
+                "size": 5678,
+            },
+        ],
+    ]
+
+    def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert "--dump-json" in command
+        return subprocess.CompletedProcess(command, 0, json.dumps(metadata), "")
+
+    assert inspect_gallery("https://gofile.io/d/abc", runner=runner) == (
+        GalleryCandidate("payload-0002", 2, "A Game-1.2-mac.zip", 1234),
+        GalleryCandidate("payload-0005", 5, "A Game-1.2-pc.zip", 5678),
+    )
+
+
+def test_download_gallery_uses_only_selected_provider_indexes(tmp_path: Path) -> None:
+    selected = GalleryCandidate("payload-0002", 2, "A Game-1.2-mac.zip", 1234)
+
+    def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert command[command.index("--range") + 1] == "2"
+        destination = Path(command[command.index("--directory") + 1])
+        destination.mkdir(exist_ok=True)
+        (destination / selected.filename).write_bytes(b"archive")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    downloaded = download_gallery(
+        "https://gofile.io/d/abc",
+        tmp_path / "download",
+        selection=(selected,),
+        runner=runner,
+    )
+    assert [path.name for path in downloaded] == [selected.filename]
 
 
 def test_download_gallery_reports_provider_failure(tmp_path: Path) -> None:

@@ -262,6 +262,15 @@ not URLs; URLs remain in the local registry and are restored only after link-ID
 validation. Uncertain mirror relationships remain `mirror_group = "unresolved"`
 and are not guessed into a downloadable mirror set.
 
+The same configured model also adjudicates mixed provider containers. VNMaster
+first asks `gallery-dl` for inert filename and size metadata without downloading
+the files. When a GoFile or MixDrop container holds several builds, the model
+selects candidate IDs under a second strict schema. Deterministic checks then
+reject update patches, APKs, and platform-mismatched files before `gallery-dl`
+downloads only the selected indexes. Low-confidence, ambiguous, or invalid
+selections fail that mirror instead of extracting every file. A label such as
+`Part 2+` is never expanded into later parts merely because it contains `+`.
+
 The feature is disabled by default. Enable one provider in
 `~/.config/vnmaster/config.toml`:
 
@@ -270,8 +279,14 @@ The feature is disabled by default. Enable one provider in
 [downloads.forum_parser]
 enabled = true
 provider = "openai"
-model = "gpt-5-mini"
+model = "gpt-5.6-sol"
+reasoning_effort = "medium"
 ```
+
+The private key belongs in `~/.config/vnmaster/secrets.toml` as a top-level
+`openai_api_key = "..."` value. Keep that file mode `0600`; never put the key in
+`config.toml` or the repository. OpenAI API billing and credentials are separate
+from ChatGPT or Codex subscriptions.
 
 For Claude, use `provider = "anthropic"` and any model available to your
 account; VNMaster uses the existing `anthropic_api_key`. For native Ollama:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 import httpx
@@ -84,13 +85,14 @@ class StructuredOutputClient:
                 "instructions": system_prompt,
                 "input": user_prompt,
                 "max_output_tokens": self.settings.max_output_tokens,
+                "reasoning": {"effort": self.settings.reasoning_effort},
                 "store": False,
                 "text": {
                     "format": {
                         "type": "json_schema",
                         "name": schema_name,
                         "strict": True,
-                        "schema": schema,
+                        "schema": _openai_strict_schema(schema),
                     }
                 },
             },
@@ -247,9 +249,11 @@ def _checked_json(response: httpx.Response, provider: str) -> dict[str, Any]:
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
+        detail = _provider_error_detail(response)
+        suffix = f": {detail}" if detail else ""
         raise StructuredOutputError(
             f"{provider} structured-output request failed with HTTP "
-            f"{response.status_code}"
+            f"{response.status_code}{suffix}"
         ) from exc
     try:
         payload = response.json()
@@ -258,3 +262,39 @@ def _checked_json(response: httpx.Response, provider: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise StructuredOutputError(f"{provider} returned an invalid response object")
     return payload
+
+
+def _provider_error_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    message = error.get("message") if isinstance(error, dict) else None
+    if not isinstance(message, str):
+        return ""
+    concise = " ".join(message.split())[:500]
+    return re.sub(r"sk-[A-Za-z0-9_-]+", "[redacted]", concise)
+
+
+def _openai_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Translate Pydantic discriminated unions to OpenAI's JSON Schema subset."""
+
+    def normalize(value: Any) -> Any:
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "discriminator":
+                continue
+            normalized["anyOf" if key == "oneOf" else key] = normalize(item)
+        return normalized
+
+    normalized = normalize(schema)
+    if not isinstance(normalized, dict):
+        raise StructuredOutputError("OpenAI schema normalization returned a non-object")
+    return normalized
