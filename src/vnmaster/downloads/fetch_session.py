@@ -254,28 +254,35 @@ class VNMasterFetchBackend:
         with build_search_client(cookie_header=self.secrets.f95zone_cookies) as client:
             for index, artifact in enumerate(plan.artifacts):
                 supplied = supplied_urls.get(index)
+                mirrors = artifact.mirrors
+                supplied_mirror: DownloadMirror | None = None
                 if supplied is not None:
-                    mirror = next(
+                    supplied_mirror = next(
                         (
                             candidate
-                            for candidate in artifact.mirrors
+                            for candidate in mirrors
                             if is_url_for_host(candidate.name, supplied)
                         ),
                         None,
                     )
-                    if mirror is None:
+                    if supplied_mirror is None:
                         downloads.append(())
                         errors.append(
                             f"The pasted URL is not valid for any enabled provider "
                             f"for {artifact.title!r}."
                         )
-                    else:
-                        downloads.append((_resolved(mirror, supplied),))
-                    continue
+                        continue
 
                 candidates: list[ResolvedDownload] = []
                 protected_for_artifact: list[ProtectedDownload] = []
-                for mirror in artifact.mirrors:
+                for mirror in mirrors:
+                    if (
+                        supplied_mirror is not None
+                        and supplied is not None
+                        and mirror == supplied_mirror
+                    ):
+                        candidates.append(_resolved(mirror, supplied))
+                        continue
                     try:
                         locator = resolve_redacted_locator(
                             mirror.locator,
@@ -300,11 +307,22 @@ class VNMasterFetchBackend:
                             "the link did not resolve to a supported URL."
                         )
                 downloads.append(tuple(candidates))
-                if not candidates:
-                    if protected_for_artifact:
-                        protected.append(protected_for_artifact[0])
-                    else:
-                        errors.append(f"No mirrors for {artifact.title!r} could be resolved.")
+                if protected_for_artifact and supplied_mirror is None:
+                    browser_candidate = protected_for_artifact[0]
+                    protected.append(browser_candidate)
+                    fallback_count = len(candidates)
+                    fallback_label = (
+                        f"; {fallback_count} automatic fallback"
+                        f"{'s' if fallback_count != 1 else ''} also resolved"
+                        if fallback_count
+                        else ""
+                    )
+                    self._reporter(
+                        f"Browser confirmation required for {browser_candidate.mirror.name} "
+                        f"on {artifact.title!r}{fallback_label}."
+                    )
+                elif not candidates:
+                    errors.append(f"No mirrors for {artifact.title!r} could be resolved.")
         return ResolutionResult(
             downloads=tuple(downloads),
             protected=tuple(protected),

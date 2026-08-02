@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import httpx
 
 from vnmaster.downloads.fetch_session import VNMasterFetchBackend
-from vnmaster.downloads.models import DownloadPlan, PlannedArtifact, ThreadInfo
+from vnmaster.downloads.models import (
+    DownloadMirror,
+    DownloadPlan,
+    PlannedArtifact,
+    ThreadInfo,
+)
 
 
 def _plan(locator: str) -> DownloadPlan:
@@ -88,3 +94,72 @@ def test_resolve_plan_uses_user_completed_url(monkeypatch) -> None:
 
     assert result.ready
     assert result.downloads[0][0].url == "https://mega.nz/file/finished"
+
+
+def test_resolve_plan_keeps_protected_preferred_mirror_with_direct_fallback(
+    monkeypatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        return httpx.Response(200, json={"status": "captcha"})
+
+    monkeypatch.setattr(
+        "vnmaster.downloads.fetch_session.build_search_client",
+        lambda **_kwargs: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    masked = "https://f95zone.to/masked/gofile.io/example"
+    base = _plan(masked)
+    plan = replace(
+        base,
+        artifacts=(
+            replace(
+                base.artifacts[0],
+                host="GOFILE",
+                alternate_mirrors=(
+                    DownloadMirror(
+                        "DATANODES",
+                        "https://datanodes.to/abcdef123456/file.zip",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    result = _backend().resolve_plan(plan)
+
+    assert not result.ready
+    assert [item.host for item in result.downloads[0]] == ["DATANODES"]
+    assert result.protected[0].mirror.name == "GOFILE"
+
+
+def test_resolve_plan_combines_user_completed_url_with_direct_fallback(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "vnmaster.downloads.fetch_session.build_search_client",
+        lambda **_kwargs: httpx.Client(),
+    )
+    base = _plan("https://f95zone.to/masked/gofile.io/example")
+    plan = replace(
+        base,
+        artifacts=(
+            replace(
+                base.artifacts[0],
+                host="GOFILE",
+                alternate_mirrors=(
+                    DownloadMirror(
+                        "DATANODES",
+                        "https://datanodes.to/abcdef123456/file.zip",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    result = _backend().resolve_plan(
+        plan,
+        {0: "https://gofile.io/d/example"},
+    )
+
+    assert result.ready
+    assert [item.host for item in result.downloads[0]] == ["GOFILE", "DATANODES"]
