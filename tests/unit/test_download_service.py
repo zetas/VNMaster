@@ -17,12 +17,18 @@ from vnmaster.downloads.service import (
     ArtifactDownloadError,
     DestinationExistsError,
     _execute_pairs,
+    _safe_component,
     execute_download_plan,
     execute_download_plan_detailed,
     execute_multipart_plan,
     execute_optional_downloads,
 )
 from vnmaster.downloads.urm import URM_RPA_NAME
+
+
+def test_safe_component_preserves_internal_apostrophes() -> None:
+    assert _safe_component("Grandma's House") == "Grandma's House"
+    assert _safe_component("'Grandma's House'") == "Grandma's House"
 
 
 def _plan() -> DownloadPlan:
