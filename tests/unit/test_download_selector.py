@@ -269,6 +269,20 @@ def test_patch_group_in_game_thread_is_an_optional_artifact() -> None:
     assert plan.artifacts[1].title == "A Game — Patch"
 
 
+def test_incremental_update_patch_is_skipped_when_full_build_is_selected() -> None:
+    game = _thread(
+        1,
+        "A Game",
+        "v1.2",
+        (_group("Mac"), _group("Update Patch (v1.1>v1.2)")),
+    )
+    plan = build_download_plan(
+        game, [], platform_priority=["mac"], preferred_hosts=["mega"]
+    )
+    assert [artifact.kind for artifact in plan.artifacts] == ["game"]
+    assert "incremental update" in plan.skipped[0].reason
+
+
 def test_extras_attachment_is_an_optional_artifact() -> None:
     game = _thread(
         1,

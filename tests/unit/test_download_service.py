@@ -513,7 +513,7 @@ def test_multipart_publishes_each_part_into_its_own_dir(tmp_path: Path) -> None:
     assert len(result.completed[1].artifacts) == 1
 
 
-def test_multipart_range_addon_applies_to_each_eligible_part(tmp_path: Path) -> None:
+def test_multipart_plus_addon_does_not_expand_to_later_part(tmp_path: Path) -> None:
     base = _part_plan()
     plan = DownloadPlan(
         base.game,
@@ -534,7 +534,7 @@ def test_multipart_range_addon_applies_to_each_eligible_part(tmp_path: Path) -> 
         downloader=_multipart_downloader,
         unpacker=_multipart_unpacker,
     )
-    assert [len(item.artifacts) for item in result.completed] == [1, 2]
+    assert [len(item.artifacts) for item in result.completed] == [1, 1]
 
 
 def test_multipart_requires_part_label_on_every_game(tmp_path: Path) -> None:

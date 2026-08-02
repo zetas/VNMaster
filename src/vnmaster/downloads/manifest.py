@@ -36,6 +36,10 @@ _MERGE_ADDON_RE = re.compile(
     r"\b(?:mod|patch|hotfix|fix|cheat|gallery|unlock(?:er)?|translation|uncensor)\b",
     re.I,
 )
+_INCREMENTAL_UPDATE_RE = re.compile(
+    r"\b(?:update|upgrade)\s+patch\b|\b(?:incremental|delta)\s+(?:patch|update|build)\b",
+    re.I,
+)
 
 
 class _StrictModel(BaseModel):
@@ -328,6 +332,14 @@ def build_download_plan_from_manifest(
     skipped: list[SkippedArtifact] = []
     for artifact in manifest.artifacts:
         if artifact.kind == "addon" and not include_addons:
+            continue
+        if artifact.kind == "addon" and _INCREMENTAL_UPDATE_RE.search(artifact.title):
+            skipped.append(
+                SkippedArtifact(
+                    artifact.title,
+                    "incremental update is not applicable when downloading a full build",
+                )
+            )
             continue
         if artifact.kind == "addon" and _duplicates_numbered_game(
             artifact.title,
@@ -670,7 +682,10 @@ def _artifact_applies_to_parts(
         return True
     start = int(match.group(1))
     if match.group(3):
-        return any(number >= start for number in selected_parts)
+        # A label such as "Part 2+" is not a mathematically defined range.
+        # Keep it scoped to the named part unless stronger structured evidence
+        # identifies exact additional targets.
+        return start in selected_parts
     end = int(match.group(2) or start)
     return any(start <= number <= end for number in selected_parts)
 

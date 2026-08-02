@@ -19,7 +19,7 @@ from vnmaster.downloads.addon_installer import (
     should_install_addon,
 )
 from vnmaster.downloads.archives import unpack_payload
-from vnmaster.downloads.downloader import download_url
+from vnmaster.downloads.downloader import ArtifactDownloader, download_url
 from vnmaster.downloads.models import DownloadPlan, PlannedArtifact, ResolvedDownload
 from vnmaster.downloads.urm import UrmInstallError, install_urm_mod
 from vnmaster.downloads.verification import verify_install
@@ -71,6 +71,7 @@ def execute_download_plan(
     downloader: Callable[[str, Path], list[Path]] = download_url,
     unpacker: Callable[[list[Path], Path], None] = unpack_payload,
     reporter: Callable[[str], None] = lambda _message: None,
+    artifact_downloader: ArtifactDownloader | None = None,
 ) -> Path:
     return execute_download_plan_detailed(
         plan,
@@ -81,6 +82,7 @@ def execute_download_plan(
         downloader=downloader,
         unpacker=unpacker,
         reporter=reporter,
+        artifact_downloader=artifact_downloader,
     ).final_dir
 
 
@@ -94,6 +96,7 @@ def execute_download_plan_detailed(
     downloader: Callable[[str, Path], list[Path]] = download_url,
     unpacker: Callable[[list[Path], Path], None] = unpack_payload,
     reporter: Callable[[str], None] = lambda _message: None,
+    artifact_downloader: ArtifactDownloader | None = None,
 ) -> DownloadExecutionResult:
     candidates = _normalize_resolved_downloads(
         plan, resolved_downloads=resolved_downloads, resolved_urls=resolved_urls
@@ -110,6 +113,7 @@ def execute_download_plan_detailed(
         unpacker=unpacker,
         reporter=reporter,
         replace_existing=False,
+        artifact_downloader=artifact_downloader,
     )
 
 
@@ -123,6 +127,7 @@ def _execute_pairs(
     unpacker: Callable[[list[Path], Path], None],
     reporter: Callable[[str], None],
     replace_existing: bool = False,
+    artifact_downloader: ArtifactDownloader | None = None,
 ) -> DownloadExecutionResult:
     if final_dir.exists() and not replace_existing:
         raise DestinationExistsError(
@@ -160,6 +165,7 @@ def _execute_pairs(
                     downloader=downloader,
                     unpacker=unpacker,
                     reporter=reporter,
+                    artifact_downloader=artifact_downloader,
                 )
             except ArtifactDownloadError as exc:
                 if artifact.kind == "game":
@@ -328,6 +334,7 @@ def execute_optional_downloads(
     downloader: Callable[[str, Path], list[Path]] = download_url,
     unpacker: Callable[[list[Path], Path], None] = unpack_payload,
     reporter: Callable[[str], None] = lambda _message: None,
+    artifact_downloader: ArtifactDownloader | None = None,
 ) -> OptionalDownloadResult:
     """Download selected add-ons without fetching or modifying a game build."""
     if not plan.artifacts or any(artifact.kind != "addon" for artifact in plan.artifacts):
@@ -359,6 +366,7 @@ def execute_optional_downloads(
                 downloader=downloader,
                 unpacker=unpacker,
                 reporter=reporter,
+                artifact_downloader=artifact_downloader,
             )
             scope_root = _optional_scope_root(version_root, artifact.part)
             component = _safe_component(artifact.title)
@@ -440,6 +448,7 @@ def execute_multipart_plan(
     unpacker: Callable[[list[Path], Path], None] = unpack_payload,
     reporter: Callable[[str], None] = lambda _message: None,
     on_part_complete: Callable[[str, DownloadExecutionResult], None] | None = None,
+    artifact_downloader: ArtifactDownloader | None = None,
 ) -> MultiPartExecutionResult:
     candidates = _normalize_resolved_downloads(
         plan, resolved_downloads=resolved_downloads, resolved_urls=resolved_urls
@@ -482,6 +491,7 @@ def execute_multipart_plan(
                 unpacker=unpacker,
                 reporter=reporter,
                 replace_existing=True,
+                artifact_downloader=artifact_downloader,
             )
         except (ArtifactDownloadError, RuntimeError, OSError) as exc:
             detail = _concise_error(exc)
@@ -517,7 +527,7 @@ def _part_scope_matches(scope: str | None, part_label: str) -> bool:
     number = int(wanted.group(1))
     start = int(declared.group(1))
     if declared.group(3):
-        return number >= start
+        return number == start
     end = int(declared.group(2) or start)
     return start <= number <= end
 
@@ -565,6 +575,7 @@ def _download_with_fallbacks(
     downloader: Callable[[str, Path], list[Path]],
     unpacker: Callable[[list[Path], Path], None],
     reporter: Callable[[str], None],
+    artifact_downloader: ArtifactDownloader | None = None,
 ) -> tuple[ResolvedDownload, tuple[Path, ...]]:
     failures: list[str] = []
     for candidate_index, candidate in enumerate(candidates, start=1):
@@ -574,7 +585,14 @@ def _download_with_fallbacks(
         )
         attempt_root = staging / ".attempts" / f"{index:02d}" / f"{candidate_index:02d}"
         try:
-            downloaded = downloader(candidate.url, attempt_root / "download")
+            if artifact_downloader is None:
+                downloaded = downloader(candidate.url, attempt_root / "download")
+            else:
+                downloaded = artifact_downloader(
+                    artifact,
+                    candidate.url,
+                    attempt_root / "download",
+                )
             unpacker(downloaded, attempt_root / "output")
             archive_dir.mkdir(parents=True)
             archived: list[Path] = []

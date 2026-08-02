@@ -26,6 +26,10 @@ _REJECT_GAME_GROUP_RE = re.compile(r"android|compressed|update|patch|hotfix", re
 _REJECT_ADDON_GROUP_RE = re.compile(r"android|compressed", re.I)
 _OPTIONAL_GROUP_RE = _ADDON_RE
 _ADDON_VERSION_RE = re.compile(r"\bv?(\d+(?:\.\d+)+(?:[a-z][a-z0-9]*)?)", re.I)
+_INCREMENTAL_UPDATE_RE = re.compile(
+    r"\b(?:update|upgrade)\s+patch\b|\b(?:incremental|delta)\s+(?:patch|update|build)\b",
+    re.I,
+)
 
 # Priority order for ties; aliases fold into one family.
 _PART_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -231,17 +235,33 @@ def build_download_plan(
         ]
     selected: list[PlannedArtifact] = [*game_artifacts]
     if include_addons:
-        selected.extend(
-            _select_embedded_addons(
-                game,
-                game_artifacts,
-                preferred_hosts,
-                detection=detection,
-                selected_parts=selected_parts,
-            )
+        embedded = _select_embedded_addons(
+            game,
+            game_artifacts,
+            preferred_hosts,
+            detection=detection,
+            selected_parts=selected_parts,
         )
+        for embedded_artifact in embedded:
+            if _INCREMENTAL_UPDATE_RE.search(embedded_artifact.group_name):
+                skipped.append(
+                    SkippedArtifact(
+                        embedded_artifact.title,
+                        "incremental update is not applicable when downloading a full build",
+                    )
+                )
+            else:
+                selected.append(embedded_artifact)
 
     for addon in addons if include_addons else []:
+        if _INCREMENTAL_UPDATE_RE.search(addon.title):
+            skipped.append(
+                SkippedArtifact(
+                    addon.title,
+                    "incremental update is not applicable when downloading a full build",
+                )
+            )
+            continue
         compatible, reason = addon_matches_game(game, addon)
         if not compatible:
             skipped.append(SkippedArtifact(addon.title, reason))

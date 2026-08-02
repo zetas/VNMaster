@@ -61,17 +61,20 @@ class MatchingConfig(BaseModel):
 
 
 class ForumParserConfig(BaseModel):
-    """Optional schema-constrained LLM parser for irregular forum posts."""
+    """Schema-constrained LLM interpretation for irregular download metadata."""
 
     enabled: bool = False
     provider: Literal[
         "openai", "anthropic", "ollama", "openai_compatible"
     ] = "openai"
-    model: str = "gpt-5-mini"
+    model: str = "gpt-5.6-sol"
     base_url: str | None = None
     constraint_mode: Literal["auto", "openai", "vllm", "llama_cpp"] = "auto"
     timeout_seconds: float = Field(default=120.0, gt=0.0, le=600.0)
     max_output_tokens: int = Field(default=8192, ge=1024, le=65536)
+    reasoning_effort: Literal[
+        "none", "low", "medium", "high", "xhigh", "max"
+    ] = "medium"
     thinking: bool = False
     merge_strategy: Literal["model", "deterministic"] = "model"
     max_groups_per_chunk: int = Field(default=10, ge=1, le=50)
