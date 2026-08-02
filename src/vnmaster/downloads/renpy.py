@@ -13,6 +13,7 @@ class RenPyLayoutError(RuntimeError):
 
 def find_renpy_game_dir(game_root: Path, *, platform: str | None) -> Path | None:
     """Return the active Ren'Py ``game`` directory for an extracted build."""
+    normalized_platform = _normalize_platform(platform)
     candidates = [
         path
         for path in (game_root, *game_root.rglob("game"))
@@ -24,11 +25,11 @@ def find_renpy_game_dir(game_root: Path, *, platform: str | None) -> Path | None
         return candidates[0]
 
     app_candidates = [path for path in candidates if _is_macos_app_game_dir(path)]
-    if platform == "mac" and len(app_candidates) == 1:
+    if normalized_platform == "mac" and len(app_candidates) == 1:
         return app_candidates[0]
 
     non_app_candidates = [path for path in candidates if path not in app_candidates]
-    if platform in {"windows", "linux"} and len(non_app_candidates) == 1:
+    if normalized_platform in {"windows", "linux"} and len(non_app_candidates) == 1:
         return non_app_candidates[0]
 
     choices = ", ".join(str(path.relative_to(game_root)) for path in candidates)
@@ -56,3 +57,16 @@ def _is_macos_app_game_dir(path: Path) -> bool:
         and parts[-4:] == ("contents", "resources", "autorun", "game")
         and parts[-5].endswith(".app")
     )
+
+
+def _normalize_platform(platform: str | None) -> str | None:
+    if platform is None:
+        return None
+    normalized = platform.strip().casefold()
+    aliases = {
+        "macos": "mac",
+        "osx": "mac",
+        "win": "windows",
+        "pc": "windows",
+    }
+    return aliases.get(normalized, normalized)

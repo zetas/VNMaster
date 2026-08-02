@@ -567,6 +567,25 @@ def debug_search(query: str, config_path: Path | None, save_path: Path | None) -
             click.echo(f"\nRaw JSON saved to {save_path}")
 
 
+@main.command("tui")
+@click.option(
+    "--config", "config_path", type=click.Path(exists=True, path_type=Path),
+    default=None, help="Path to config.toml",
+)
+@click.option(
+    "--dest", "destination", type=click.Path(path_type=Path), default=None,
+    help="Destination root (default: downloads.destination from config).",
+)
+def tui_command(config_path: Path | None, destination: Path | None) -> None:
+    """Open the interactive download planner."""
+    from vnmaster.tui import run_tui
+
+    try:
+        run_tui(config_path=config_path, destination=destination)
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 @main.command()
 @click.argument("game")
 @click.option(
@@ -627,11 +646,23 @@ def fetch(
     required; discovered patches, mods, walkthroughs, and other extras are
     offered as an interactive opt-in list.
     """
+    from dataclasses import replace
+    import time
+
     import httpx
 
     from vnmaster.config import Secrets
     from vnmaster.downloads.downloader import is_url_for_host
-    from vnmaster.downloads.f95 import AmbiguousGameError, resolve_redacted_locator
+    from vnmaster.downloads.f95 import (
+        AmbiguousGameError,
+        fetch_starter_post_text,
+        resolve_redacted_locator,
+    )
+    from vnmaster.downloads.manifest import (
+        DownloadManifest,
+        build_download_plan_from_manifest,
+        part_detection_from_manifest,
+    )
     from vnmaster.downloads.mega import find_mega_get
     from vnmaster.downloads.models import ResolvedDownload
     from vnmaster.downloads.service import execute_download_plan_detailed
@@ -642,6 +673,8 @@ def fetch(
         select_optional_artifacts,
     )
     from vnmaster.f95_search import build_search_client
+    from vnmaster.llm.forum_manifest import ForumManifestInterpreter
+    from vnmaster.llm.structured import StructuredOutputClient
 
     paths, cfg, engine = _load_engine_and_paths(config_path)
     secrets = Secrets.load(paths.config_dir / "secrets.toml")
@@ -661,9 +694,47 @@ def fetch(
                     plan_input, client=client, include_addons=not no_addons
                 )
 
+            interpreted: DownloadManifest | None = None
+            parser_settings = cfg.downloads.forum_parser
+            if parser_settings.enabled:
+                try:
+                    post_text = fetch_starter_post_text(
+                        discovery.game.url, client=client
+                    )
+                    with StructuredOutputClient(parser_settings, secrets) as generator:
+                        interpreter = ForumManifestInterpreter(
+                            generator,
+                            parser_settings,
+                            engine,
+                            clock=lambda: int(time.time()),
+                            reporter=click.echo,
+                        )
+                        interpretation = interpreter.interpret(
+                            discovery.game, post_text
+                        )
+                    interpreted = interpretation.manifest
+                    source = "cache" if interpretation.cached else (
+                        f"{interpretation.calls} constrained call"
+                        f"{'s' if interpretation.calls != 1 else ''}"
+                    )
+                    click.echo(
+                        f"Forum parser: {parser_settings.provider}/"
+                        f"{parser_settings.model} ({source})"
+                    )
+                except Exception as exc:
+                    detail = " ".join(str(exc).split()) or type(exc).__name__
+                    click.echo(
+                        "Warning: schema-constrained forum parsing failed; "
+                        f"using deterministic rules instead ({detail})."
+                    )
+
             from vnmaster.downloads.selector import detect_parts
 
-            detection = detect_parts(discovery.game.downloads)
+            detection = (
+                part_detection_from_manifest(interpreted)
+                if interpreted is not None
+                else detect_parts(discovery.game.downloads)
+            )
             for warning in detection.warnings:
                 click.echo(f"Note: {warning}")
             if any(
@@ -696,17 +767,35 @@ def fetch(
                 raise click.UsageError(
                     "--parts was given but this thread has no detected parts."
                 )
-            candidate_plan = build_plan_from_discovery(
-                discovery,
-                platform_priority=cfg.downloads.platform_priority,
-                preferred_hosts=(
-                    [preferred_host]
-                    if preferred_host
-                    else cfg.downloads.preferred_hosts
-                ),
-                detection=detection if detection.is_multipart else None,
-                selected_parts=selected_parts,
+            preferred_hosts = (
+                [preferred_host]
+                if preferred_host
+                else cfg.downloads.preferred_hosts
             )
+            if interpreted is not None:
+                candidate_plan = build_download_plan_from_manifest(
+                    discovery.game,
+                    interpreted,
+                    platform_priority=cfg.downloads.platform_priority,
+                    preferred_hosts=preferred_hosts,
+                    selected_parts=selected_parts,
+                    include_addons=not no_addons,
+                    discovered_addons=discovery.addons,
+                )
+                if discovery.skipped:
+                    candidate_plan = replace(
+                        candidate_plan,
+                        skipped=candidate_plan.skipped + discovery.skipped,
+                    )
+            else:
+                candidate_plan = build_plan_from_discovery(
+                    discovery,
+                    platform_priority=cfg.downloads.platform_priority,
+                    preferred_hosts=preferred_hosts,
+                    detection=detection if detection.is_multipart else None,
+                    selected_parts=selected_parts,
+                    include_addons=not no_addons,
+                )
             _print_download_candidates(candidate_plan, destination)
             if dry_run:
                 return
@@ -870,17 +959,24 @@ def fetch(
             )
             for part_result in result.completed:
                 click.echo(f"Ready: {part_result.final_dir}")
+            for install_id in saved_ids:
+                click.echo(f"Recorded install state: #{install_id}")
             if result.failures:
                 failed = ", ".join(
-                    f"{f.part} ({f.error})" for f in result.failures
+                    (
+                        f"optional {f.part} ({f.error})"
+                        if f.kind == "addon"
+                        else f"{f.part} ({f.error})"
+                    )
+                    for f in result.failures
                 )
                 done = ", ".join(
                     r.final_dir.name for r in result.completed
                 ) or "none"
                 raise click.ClickException(
-                    f"Some parts failed: {failed}. Completed: {done}."
+                    f"Some selected items failed: {failed}. "
+                    f"Completed and kept: {done}."
                 )
-            click.echo(f"Recorded install state: #{saved_ids[-1]}")
             return
 
         execution = execute_download_plan_detailed(
@@ -898,6 +994,15 @@ def fetch(
 
     click.echo(f"Recorded install state: #{state.id}")
     click.echo(f"Ready: {execution.final_dir}")
+    if execution.failures:
+        failed = ", ".join(
+            f"optional {failure.part} ({failure.error})"
+            for failure in execution.failures
+        )
+        raise click.ClickException(
+            f"Some selected items failed: {failed}. "
+            "The game and successful items were kept."
+        )
 
 
 @main.command()
@@ -1021,7 +1126,7 @@ def _print_artifact(artifact: PlannedArtifact, *, prefix: str) -> None:
     from vnmaster.downloads.addon_installer import should_install_addon
 
     platform = f" · {artifact.platform}" if artifact.platform else ""
-    version = f" · {artifact.version}" if artifact.kind == "addon" and artifact.version else ""
+    version = f" · {artifact.version}" if artifact.version else ""
     fallback_count = len(artifact.alternate_mirrors)
     fallbacks = (
         f" · {fallback_count} fallback{'s' if fallback_count != 1 else ''}"

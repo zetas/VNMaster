@@ -67,6 +67,7 @@ class PlannedArtifact:
     warning: str | None = None
     alternate_mirrors: tuple[DownloadMirror, ...] = field(default_factory=tuple)
     part: str | None = None
+    install_action: Literal["merge", "separate"] | None = None
 
     @property
     def mirrors(self) -> tuple[DownloadMirror, ...]:

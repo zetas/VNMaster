@@ -71,7 +71,7 @@ def test_ensure_schema_creates_all_tables(tmp_path: Path) -> None:
     names = set(inspect(engine).get_table_names())
     assert {
         "library_games", "pairings", "changelog_extractions",
-        "digest_runs", "digest_entries", "game_installs",
+        "forum_manifest_extractions", "digest_runs", "digest_entries", "game_installs",
     } <= names
 
 

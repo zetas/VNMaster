@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from vnmaster.downloads.datanodes import download_datanodes, is_datanodes_url
 from vnmaster.downloads.gallery import download_gallery, is_gallery_url
@@ -17,6 +18,14 @@ class UnsupportedDownloadHostError(RuntimeError):
 
 
 def is_url_for_host(host: str, url: str) -> bool:
+    parsed = urlsplit(url)
+    if (parsed.hostname or "").casefold() == "f95zone.to" and (
+        "/threads/" in parsed.path.casefold()
+        or "/posts/" in parsed.path.casefold()
+        or "/post-" in parsed.path.casefold()
+    ):
+        # Forum pages are discovery/manual-install targets, never file payloads.
+        return False
     normalized = host.casefold()
     if "mega" in normalized:
         return is_mega_url(url)

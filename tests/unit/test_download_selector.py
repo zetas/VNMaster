@@ -532,3 +532,39 @@ def test_heading_section_thread_plans_downloadable_parts() -> None:
     assert [a.part for a in games] == ["Part 1", "Part 2"]
     assert all(a.platform == "mac" for a in games)
     assert all(a.locator for a in games)
+
+
+def test_compact_p_number_tags_walkthrough_to_selected_part() -> None:
+    game = _thread(9, "Grandma's House", "Part 7 v0.108", (
+        _heading("Part 6"),
+        _group("Mac"),
+        _heading("Part 7"),
+        _group("Mac"),
+        _group("WALKTHROUGH — GrandmasHouseP6-0.95-guide.pdf"),
+        _group("WALKTHROUGH — GrandmasHouseP7-0.104-guide.pdf"),
+    ))
+    detection = detect_parts(game.downloads)
+    plan = build_download_plan(
+        game,
+        [],
+        platform_priority=["mac"],
+        preferred_hosts=["mega"],
+        detection=detection,
+        selected_parts=(6,),
+    )
+    addons = [artifact for artifact in plan.artifacts if artifact.kind == "addon"]
+    assert [artifact.part for artifact in addons] == ["Part 6"]
+
+
+def test_embedded_forum_thread_is_not_offered_as_a_file() -> None:
+    game = _thread(9, "Grandma's House", "v1", (
+        _group("Mac"),
+        DownloadGroup(
+            "WALKTHROUGH MOD",
+            (DownloadMirror("WALKTHROUGH MOD", "https://f95zone.to/threads/mod.99/"),),
+        ),
+    ))
+    plan = build_download_plan(
+        game, [], platform_priority=["mac"], preferred_hosts=["mega"]
+    )
+    assert [artifact.kind for artifact in plan.artifacts] == ["game"]

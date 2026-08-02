@@ -12,7 +12,9 @@ changelog magnitude.
 - [Manual smoke test](#manual-smoke-test)
 - [Discord slash commands](#discord-slash-commands)
 - [Download and extract a game](#download-and-extract-a-game)
+  - [Interactive download TUI](#interactive-download-tui)
   - [Multi-part games](#multi-part-games)
+  - [Schema-constrained forum parsing](#schema-constrained-forum-parsing)
 - [Rebuild a downloaded game](#rebuild-a-downloaded-game)
 - [Platform compatibility and contributing](#platform-compatibility-and-contributing)
 - [Tests](#tests)
@@ -154,6 +156,46 @@ vnmaster fetch "Eternum" --no-addons
 vnmaster fetch "Eternum" --force-incompatible-addons
 ```
 
+### Interactive download TUI
+
+For multipart threads and larger add-on lists, open the full-screen planner:
+
+```bash
+vnmaster tui
+```
+
+Search by title, thread ID, or URL, then select the independent game parts,
+optional downloads, and allowed providers in separate panes. The plan preview
+updates as selections change. Deselecting a provider removes it from both the
+primary link and all fallbacks; if that leaves a selected artifact without a
+provider, the TUI disables download and identifies the affected item. Network,
+Ollama/API parsing, link resolution, download, extraction, and verification run
+in background workers and report progress in the activity pane. The same
+activity is retained in the rotating `~/Library/Logs/VNMaster/tui.log`, with
+session start and end markers, so a failure can be inspected after closing the
+TUI.
+
+Enable **Optionals only** before review to skip every game artifact and download
+only the selected mods, patches, walkthroughs, or other extras. Optional-only
+downloads are extracted beneath the matching game/version (and exact part, when
+known), retain their original payload under `archive/addons/`, and are kept
+separate: this mode never modifies game files. Each selected optional publishes
+independently, so one failed host does not discard another optional that
+completed successfully.
+
+Provider choices default to enabled. To keep a provider unchecked when the TUI
+opens a new plan, add its forum label to `config.toml`:
+
+```toml
+[downloads]
+excluded_hosts = ["MEGA"]
+```
+
+The TUI still lets you re-enable a configured exclusion for an individual run.
+The existing `vnmaster fetch` command remains available for scripting and dry
+runs; its `--host` option continues to change ordering without excluding
+fallbacks.
+
 For a normal fetch, use ↑/↓ to move through optional downloads, Space to toggle
 choices, and Enter to continue. In a non-interactive shell, the fallback prompt
 accepts comma-separated numbers or ranges such as `1,3-5`, `all`, or an empty
@@ -207,6 +249,67 @@ Non-interactive runs must be explicit: `--yes` requires `--parts`, e.g.
 `vnmaster fetch "grandma's house" --yes --parts 1-3` or `--parts all`.
 Threads whose download section only exposes a flat link list (no group
 headings) cannot be detected; fetch warns and treats them as a single game.
+
+### Schema-constrained forum parsing
+
+Forum authors use enough different layouts that deterministic detection cannot
+cover every thread. An opt-in LLM parser can classify the starter post and its
+indexed link labels before VNMaster builds the download plan. It splits the post
+into authored sections, extracts each section independently, then performs a
+second constrained merge. Every response must validate against VNMaster's
+Pydantic-generated JSON Schema. The model receives stable link IDs and labels,
+not URLs; URLs remain in the local registry and are restored only after link-ID
+validation. Uncertain mirror relationships remain `mirror_group = "unresolved"`
+and are not guessed into a downloadable mirror set.
+
+The feature is disabled by default. Enable one provider in
+`~/.config/vnmaster/config.toml`:
+
+```toml
+# OpenAI Responses API. Put openai_api_key in secrets.toml, or set OPENAI_API_KEY.
+[downloads.forum_parser]
+enabled = true
+provider = "openai"
+model = "gpt-5-mini"
+```
+
+For Claude, use `provider = "anthropic"` and any model available to your
+account; VNMaster uses the existing `anthropic_api_key`. For native Ollama:
+
+```toml
+[downloads.forum_parser]
+enabled = true
+provider = "ollama"
+model = "qwen3:30b"
+base_url = "http://localhost:11434"
+thinking = false
+merge_strategy = "deterministic"
+```
+
+For vLLM, llama.cpp, or another OpenAI-compatible server:
+
+```toml
+[downloads.forum_parser]
+enabled = true
+provider = "openai_compatible"
+model = "your-served-model"
+base_url = "http://localhost:8000/v1"
+constraint_mode = "vllm" # use "llama_cpp" for llama.cpp
+```
+
+Remote compatible servers can use `forum_parser_api_key` in `secrets.toml` or
+the `VNMASTER_FORUM_PARSER_API_KEY` environment variable. `constraint_mode =
+"auto"` uses the standard OpenAI chat-completions JSON Schema shape; explicit
+`vllm` uses its `structured_outputs.json` extension and `llama_cpp` uses its
+schema form. Ollama and local compatible servers do not require a key unless
+the server itself is configured to require one.
+
+The final manifest is cached by forum content, provider, and model. The first
+`--dry-run` after a post changes can therefore make multiple model calls and
+may incur provider charges; subsequent identical runs use the cache. If the
+provider is unavailable, its schema mode is unsupported, or validation fails,
+VNMaster prints a warning and falls back to its deterministic parser. No model
+call bypasses CAPTCHA or Turnstile flows.
 
 ## Rebuild a downloaded game
 

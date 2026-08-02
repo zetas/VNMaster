@@ -30,6 +30,7 @@ def test_alembic_upgrade_head_creates_all_tables(tmp_path: Path) -> None:
         "library_games",
         "pairings",
         "changelog_extractions",
+        "forum_manifest_extractions",
         "digest_runs",
         "digest_entries",
     } <= names

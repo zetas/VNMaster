@@ -102,6 +102,23 @@ class ChangelogExtraction(Base):
     extracted_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class ForumManifestExtraction(Base):
+    __tablename__ = "forum_manifest_extractions"
+    __table_args__ = (
+        UniqueConstraint(
+            "f95_thread_id", "content_hash", "provider", "model"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    f95_thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    model: Mapped[str] = mapped_column(String, nullable=False)
+    manifest_json: Mapped[str] = mapped_column(Text, nullable=False)
+    extracted_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class DigestRun(Base):
     __tablename__ = "digest_runs"
 

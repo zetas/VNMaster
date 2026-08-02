@@ -1,4 +1,5 @@
 """Transactional download/extract/publish workflow."""
+
 from __future__ import annotations
 
 import re
@@ -9,6 +10,7 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from vnmaster.downloads.addon_installer import (
     AddonInstallResult,
@@ -19,7 +21,7 @@ from vnmaster.downloads.addon_installer import (
 from vnmaster.downloads.archives import unpack_payload
 from vnmaster.downloads.downloader import download_url
 from vnmaster.downloads.models import DownloadPlan, PlannedArtifact, ResolvedDownload
-from vnmaster.downloads.urm import install_urm_mod
+from vnmaster.downloads.urm import UrmInstallError, install_urm_mod
 from vnmaster.downloads.verification import verify_install
 
 
@@ -56,6 +58,7 @@ class DownloadExecutionResult:
     verification_checks: tuple[str, ...]
     renpy_game_dir: Path | None
     urm_path: Path | None
+    failures: tuple[PartFailure, ...] = ()
 
 
 def execute_download_plan(
@@ -132,6 +135,7 @@ def _execute_pairs(
     game_download: ResolvedDownload | None = None
     executions: list[ArtifactExecution] = []
     installable_addons: list[tuple[int, PlannedArtifact, Path]] = []
+    failures: list[PartFailure] = []
     try:
         for index, (artifact, artifact_candidates) in enumerate(pairs, start=1):
             if artifact.kind == "game":
@@ -145,17 +149,28 @@ def _execute_pairs(
                     / "addons"
                     / f"{index:02d}-{_safe_component(artifact.title)}"
                 )
-            selected, archived = _download_with_fallbacks(
-                artifact,
-                artifact_candidates,
-                index=index,
-                staging=staging,
-                output_dir=output_dir,
-                archive_dir=archive_dir,
-                downloader=downloader,
-                unpacker=unpacker,
-                reporter=reporter,
-            )
+            try:
+                selected, archived = _download_with_fallbacks(
+                    artifact,
+                    artifact_candidates,
+                    index=index,
+                    staging=staging,
+                    output_dir=output_dir,
+                    archive_dir=archive_dir,
+                    downloader=downloader,
+                    unpacker=unpacker,
+                    reporter=reporter,
+                )
+            except ArtifactDownloadError as exc:
+                if artifact.kind == "game":
+                    raise
+                detail = _concise_error(exc)
+                failures.append(PartFailure(artifact.title, detail, kind="addon"))
+                reporter(
+                    f"Optional download {artifact.title!r} failed; "
+                    "continuing so completed items can still be kept."
+                )
+                continue
             executions.append(
                 ArtifactExecution(
                     artifact=artifact,
@@ -171,11 +186,20 @@ def _execute_pairs(
 
         addon_results: list[AddonInstallResult] = []
         for execution_index, artifact, addon_dir in installable_addons:
-            preview = preview_addon(
-                addon_dir,
-                staging / "game",
-                platform=game_download.platform if game_download else None,
-            )
+            try:
+                preview = preview_addon(
+                    addon_dir,
+                    staging / "game",
+                    platform=game_download.platform if game_download else None,
+                )
+            except (RuntimeError, OSError) as exc:
+                detail = _concise_error(exc)
+                failures.append(PartFailure(artifact.title, detail, kind="addon"))
+                reporter(
+                    f"Optional download {artifact.title!r} could not be installed; "
+                    "its downloaded files will be kept separate."
+                )
+                continue
             reporter(
                 f"Add-on install preview for {artifact.title!r}: "
                 f"{preview.files_to_install} files "
@@ -204,34 +228,39 @@ def _execute_pairs(
                     files_installed=result.files_installed,
                     files_overwritten=result.files_overwritten,
                     readme_path=(
-                        result.readme.relative_to(staging)
-                        if result.readme is not None
-                        else None
+                        result.readme.relative_to(staging) if result.readme is not None else None
                     ),
                 ),
             )
 
         urm_path: Path | None = None
         if urm_mods_dir is not None:
-            installed = install_urm_mod(
-                staging / "game",
-                urm_mods_dir,
-                platform=game_download.platform if game_download else None,
-            )
-            if installed is None:
-                reporter("URM not installed: the extracted build is not a Ren'Py game.")
+            try:
+                installed = install_urm_mod(
+                    staging / "game",
+                    urm_mods_dir,
+                    platform=game_download.platform if game_download else None,
+                )
+            except UrmInstallError as exc:
+                detail = _concise_error(exc)
+                failures.append(PartFailure("URM", detail, kind="addon"))
+                reporter(
+                    "Optional URM installation failed; continuing so the game and "
+                    "downloaded add-ons can still be kept."
+                )
             else:
-                reporter(f"Installed URM: {installed.relative_to(staging)}")
-                urm_path = installed.relative_to(staging)
+                if installed is None:
+                    reporter("URM not installed: the extracted build is not a Ren'Py game.")
+                else:
+                    reporter(f"Installed URM: {installed.relative_to(staging)}")
+                    urm_path = installed.relative_to(staging)
 
         shutil.rmtree(staging / ".attempts", ignore_errors=True)
         verification = verify_install(
             staging / "game",
             platform=game_download.platform if game_download else None,
             archive_paths=tuple(
-                staging / archive
-                for execution in executions
-                for archive in execution.archive_paths
+                staging / archive for execution in executions for archive in execution.archive_paths
             ),
             addon_results=tuple(addon_results),
             urm_installed=urm_path is not None,
@@ -252,6 +281,7 @@ def _execute_pairs(
         else:
             staging.replace(final_dir)
         published = True
+        reporter(f"Published completed download: {final_dir}")
         return DownloadExecutionResult(
             final_dir=final_dir,
             artifacts=tuple(executions),
@@ -262,6 +292,7 @@ def _execute_pairs(
                 else None
             ),
             urm_path=urm_path,
+            failures=tuple(failures),
         )
     finally:
         if not published and staging.exists():
@@ -272,6 +303,7 @@ def _execute_pairs(
 class PartFailure:
     part: str
     error: str
+    kind: Literal["game", "addon"] = "game"
 
 
 @dataclass(frozen=True)
@@ -279,6 +311,122 @@ class MultiPartExecutionResult:
     version_root: Path
     completed: tuple[DownloadExecutionResult, ...]
     failures: tuple[PartFailure, ...]
+
+
+@dataclass(frozen=True)
+class OptionalDownloadResult:
+    completed: tuple[Path, ...]
+    failures: tuple[PartFailure, ...]
+
+
+def execute_optional_downloads(
+    plan: DownloadPlan,
+    *,
+    resolved_downloads: list[tuple[ResolvedDownload, ...]] | None = None,
+    resolved_urls: list[str] | None = None,
+    destination_root: Path,
+    downloader: Callable[[str, Path], list[Path]] = download_url,
+    unpacker: Callable[[list[Path], Path], None] = unpack_payload,
+    reporter: Callable[[str], None] = lambda _message: None,
+) -> OptionalDownloadResult:
+    """Download selected add-ons without fetching or modifying a game build."""
+    if not plan.artifacts or any(artifact.kind != "addon" for artifact in plan.artifacts):
+        raise ValueError("Optional-only execution requires one or more add-ons")
+    candidates = _normalize_resolved_downloads(
+        plan,
+        resolved_downloads=resolved_downloads,
+        resolved_urls=resolved_urls,
+    )
+    version = _safe_component(plan.game.version or "unknown-version")
+    version_root = destination_root / _safe_component(plan.game.title) / version
+    destination_root.mkdir(parents=True, exist_ok=True)
+    completed: list[Path] = []
+    failures: list[PartFailure] = []
+
+    for index, (artifact, artifact_candidates) in enumerate(
+        zip(plan.artifacts, candidates, strict=True),
+        start=1,
+    ):
+        staging = Path(tempfile.mkdtemp(prefix=".vnmaster-optionals-", dir=destination_root))
+        try:
+            _download_with_fallbacks(
+                artifact,
+                artifact_candidates,
+                index=index,
+                staging=staging,
+                output_dir=staging / "output",
+                archive_dir=staging / "archive",
+                downloader=downloader,
+                unpacker=unpacker,
+                reporter=reporter,
+            )
+            scope_root = _optional_scope_root(version_root, artifact.part)
+            component = _safe_component(artifact.title)
+            output_destination = scope_root / "addons" / component
+            archive_destination = scope_root / "archive" / "addons" / component
+            _publish_optional_paths(
+                staging,
+                output_destination=output_destination,
+                archive_destination=archive_destination,
+            )
+            completed.append(output_destination)
+            reporter(
+                f"Optional download ready: {output_destination} "
+                "(kept separate; game files were not modified)."
+            )
+        except (ArtifactDownloadError, RuntimeError, OSError) as exc:
+            detail = _concise_error(exc)
+            failures.append(PartFailure(artifact.title, detail, kind="addon"))
+            reporter(f"Optional download {artifact.title!r} failed: {detail}")
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+
+    return OptionalDownloadResult(tuple(completed), tuple(failures))
+
+
+def _optional_scope_root(version_root: Path, part: str | None) -> Path:
+    if part is not None and re.fullmatch(r"part\s*\d+", part.strip(), re.I):
+        return version_root / _safe_component(part)
+    return version_root
+
+
+def _publish_optional_paths(
+    staging: Path,
+    *,
+    output_destination: Path,
+    archive_destination: Path,
+) -> None:
+    pairs = (
+        (staging / "output", output_destination),
+        (staging / "archive", archive_destination),
+    )
+    changes: list[tuple[Path, Path, Path, bool]] = []
+    try:
+        for source, destination in pairs:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            backup = destination.parent / (f".vnmaster-previous-{destination.name}-{staging.name}")
+            had_previous = destination.exists()
+            if had_previous:
+                destination.replace(backup)
+            try:
+                source.replace(destination)
+            except Exception:
+                if had_previous and backup.exists():
+                    backup.replace(destination)
+                raise
+            changes.append((source, destination, backup, had_previous))
+    except Exception:
+        for source, destination, backup, had_previous in reversed(changes):
+            if destination.exists():
+                destination.replace(source)
+            if had_previous and backup.exists():
+                backup.replace(destination)
+        raise
+    else:
+        for _source, _destination, backup, had_previous in changes:
+            if had_previous and backup.exists():
+                shutil.rmtree(backup)
 
 
 def execute_multipart_plan(
@@ -305,17 +453,22 @@ def execute_multipart_plan(
 
     version = _safe_component(plan.game.version or "unknown-version")
     version_root = destination_root / _safe_component(plan.game.title) / version
+    version_root_existed = version_root.exists()
     version_root.mkdir(parents=True, exist_ok=True)
 
     completed: list[DownloadExecutionResult] = []
     failures: list[PartFailure] = []
-    for artifact, artifact_candidates in games:
-        assert artifact.part is not None  # guarded above: every game has a part label
+    for game_index, (artifact, artifact_candidates) in enumerate(games):
         part_label = artifact.part
+        if part_label is None:
+            raise ValueError("execute_multipart_plan requires part labels on every game")
         part_pairs = [
             (artifact, artifact_candidates),
-            *[(a, c) for a, c in tagged if a.part == part_label],
-            *shared,
+            *[(a, c) for a, c in tagged if _part_scope_matches(a.part, part_label)],
+            # An unscoped optional file is collection-level. Keep one copy
+            # with the first selected part instead of downloading it into
+            # every independent game.
+            *(shared if game_index == 0 else []),
         ]
         part_dir = version_root / _safe_component(part_label)
         reporter(f"Fetching {part_label} into {part_dir}...")
@@ -336,13 +489,37 @@ def execute_multipart_plan(
             reporter(f"{part_label} failed: {detail}")
             continue
         completed.append(result)
+        failures.extend(result.failures)
         if on_part_complete is not None:
             on_part_complete(part_label, result)
+    if not completed and not version_root_existed:
+        version_root.rmdir()
+        try:
+            version_root.parent.rmdir()
+        except OSError:
+            pass
     return MultiPartExecutionResult(
         version_root=version_root,
         completed=tuple(completed),
         failures=tuple(failures),
     )
+
+
+def _part_scope_matches(scope: str | None, part_label: str) -> bool:
+    if scope is None:
+        return False
+    if scope.casefold() == part_label.casefold():
+        return True
+    wanted = re.search(r"\bpart\s*(\d+)\b", part_label, re.I)
+    declared = re.search(r"\bpart\s*(\d+)\s*(?:-\s*(\d+)|(\+))?", scope, re.I)
+    if wanted is None or declared is None:
+        return False
+    number = int(wanted.group(1))
+    start = int(declared.group(1))
+    if declared.group(3):
+        return number >= start
+    end = int(declared.group(2) or start)
+    return start <= number <= end
 
 
 def _normalize_resolved_downloads(
@@ -393,12 +570,9 @@ def _download_with_fallbacks(
     for candidate_index, candidate in enumerate(candidates, start=1):
         label = _candidate_label(candidate)
         reporter(
-            f"Downloading {artifact.title!r} via {label} "
-            f"({candidate_index}/{len(candidates)})..."
+            f"Downloading {artifact.title!r} via {label} ({candidate_index}/{len(candidates)})..."
         )
-        attempt_root = (
-            staging / ".attempts" / f"{index:02d}" / f"{candidate_index:02d}"
-        )
+        attempt_root = staging / ".attempts" / f"{index:02d}" / f"{candidate_index:02d}"
         try:
             downloaded = downloader(candidate.url, attempt_root / "download")
             unpacker(downloaded, attempt_root / "output")
@@ -411,6 +585,7 @@ def _download_with_fallbacks(
             output_dir.parent.mkdir(parents=True, exist_ok=True)
             (attempt_root / "output").replace(output_dir)
             shutil.rmtree(staging / ".attempts" / f"{index:02d}", ignore_errors=True)
+            reporter(f"Downloaded and extracted {artifact.title!r} via {label}.")
             return candidate, tuple(archived)
         except (RuntimeError, OSError, tarfile.TarError, zipfile.BadZipFile) as exc:
             detail = _concise_error(exc)
@@ -432,11 +607,7 @@ def _concise_error(exc: BaseException) -> str:
 
 
 def _candidate_label(candidate: ResolvedDownload) -> str:
-    return (
-        f"{candidate.host} [{candidate.platform}]"
-        if candidate.platform
-        else candidate.host
-    )
+    return f"{candidate.host} [{candidate.platform}]" if candidate.platform else candidate.host
 
 
 def _safe_component(value: str) -> str:
