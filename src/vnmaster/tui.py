@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
+import time
 from typing import Literal
 import webbrowser
 
@@ -29,6 +30,11 @@ from textual.widgets import (
     Static,
 )
 
+from vnmaster.browser_handoff import (
+    BrowserHandoffError,
+    capture_recent_provider_url,
+    zen_history_available,
+)
 from vnmaster.downloads.downloader import is_url_for_host
 from vnmaster.downloads.f95 import AmbiguousGameError
 from vnmaster.downloads.fetch_session import (
@@ -233,58 +239,90 @@ class GameChoiceScreen(ModalScreen[int | None]):
         self.dismiss(value if isinstance(value, int) else None)
 
 
-class CaptchaScreen(ModalScreen[str | None]):
-    """Collect the final host URL after a user completes F95's CAPTCHA."""
+class BrowserHandoffScreen(ModalScreen[str | None]):
+    """Collect the final host URL after a visible F95 browser handoff."""
 
     def __init__(self, protected: ProtectedDownload) -> None:
         super().__init__()
         self.protected = protected
+        self._opened_at_us: int | None = None
 
     def compose(self) -> ComposeResult:
         host = self.protected.mirror.name
-        with Vertical(id="captcha-dialog", classes="dialog"):
+        with Vertical(id="handoff-dialog", classes="dialog"):
             yield Label("Browser step required", classes="dialog-title")
             yield Static(
-                f"F95 protected {self.protected.artifact_title!r}. Open the "
-                f"challenge, continue to {host}, then paste the resulting URL.",
+                f"F95 protected {self.protected.artifact_title!r}. Open its "
+                f"interstitial and continue to {host}. VNMaster can capture the "
+                "resulting URL from Zen for your review, or you can paste it.",
                 markup=False,
                 classes="dialog-copy",
             )
             yield Input(
                 placeholder=f"Paste the resulting {host} URL",
-                id="captcha-url",
+                id="handoff-url",
                 compact=True,
             )
-            yield Static("", id="captcha-error", markup=False)
+            yield Static("", id="handoff-message", markup=False)
             with Horizontal(classes="dialog-buttons"):
-                yield Button("Cancel", id="cancel-captcha", compact=True)
+                yield Button("Cancel", id="cancel-handoff", compact=True)
                 yield Button(
-                    "Open challenge",
-                    id="open-captcha",
+                    "Open interstitial",
+                    id="open-handoff",
                     variant="primary",
                     compact=True,
                 )
+                if zen_history_available():
+                    yield Button(
+                        "Capture Zen URL",
+                        id="capture-handoff",
+                        compact=True,
+                    )
                 yield Button(
                     "Use URL",
-                    id="accept-captcha",
+                    id="accept-handoff",
                     variant="success",
                     compact=True,
                 )
 
-    @on(Button.Pressed, "#open-captcha")
-    def open_challenge(self) -> None:
+    @on(Button.Pressed, "#open-handoff")
+    def open_handoff(self) -> None:
+        self._opened_at_us = time.time_ns() // 1_000
         webbrowser.open(self.protected.protected_url)
 
-    @on(Button.Pressed, "#cancel-captcha")
+    @on(Button.Pressed, "#capture-handoff")
+    def capture_handoff(self) -> None:
+        message = self.query_one("#handoff-message", Static)
+        if self._opened_at_us is None:
+            message.update("Open the F95 interstitial before capturing its result.")
+            return
+        try:
+            value = capture_recent_provider_url(
+                self.protected.mirror.name,
+                since_us=self._opened_at_us,
+            )
+        except BrowserHandoffError as exc:
+            message.update(str(exc))
+            return
+        if value is None:
+            message.update(
+                f"No new {self.protected.mirror.name} URL was found in Zen. "
+                "Finish the interstitial, then try capture again."
+            )
+            return
+        self.query_one("#handoff-url", Input).value = value
+        message.update("Captured from Zen. Review the URL, then choose Use URL.")
+
+    @on(Button.Pressed, "#cancel-handoff")
     def cancel(self) -> None:
         self.dismiss(None)
 
-    @on(Button.Pressed, "#accept-captcha")
-    @on(Input.Submitted, "#captcha-url")
+    @on(Button.Pressed, "#accept-handoff")
+    @on(Input.Submitted, "#handoff-url")
     def accept(self) -> None:
-        value = self.query_one("#captcha-url", Input).value.strip()
+        value = self.query_one("#handoff-url", Input).value.strip()
         if not is_url_for_host(self.protected.mirror.name, value):
-            self.query_one("#captcha-error", Static).update(
+            self.query_one("#handoff-message", Static).update(
                 f"That is not a valid HTTPS {self.protected.mirror.name} URL."
             )
             return
@@ -467,10 +505,10 @@ class VNMasterApp(App[None]):
         margin-left: 1;
     }
 
-    #captcha-error {
+    #handoff-message {
         height: auto;
         min-height: 1;
-        color: $error;
+        color: $text-muted;
     }
     """
 
@@ -979,8 +1017,8 @@ class VNMasterApp(App[None]):
             self._set_busy(False)
             protected = resolution.protected[0]
             self.push_screen(
-                CaptchaScreen(protected),
-                lambda value: self._captcha_complete(protected, value),
+                BrowserHandoffScreen(protected),
+                lambda value: self._browser_handoff_complete(protected, value),
             )
             return
         if not resolution.ready:
@@ -990,9 +1028,11 @@ class VNMasterApp(App[None]):
         self._set_busy(True, "Downloading, extracting, and verifying...")
         self._execute(plan, resolution)
 
-    def _captcha_complete(self, protected: ProtectedDownload, value: str | None) -> None:
+    def _browser_handoff_complete(
+        self, protected: ProtectedDownload, value: str | None
+    ) -> None:
         if value is None:
-            self._set_status("Browser download step cancelled.")
+            self._set_status("Browser handoff cancelled.")
             return
         self._supplied_urls[protected.artifact_index] = value
         self._begin_resolution()
