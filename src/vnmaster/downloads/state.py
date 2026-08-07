@@ -55,6 +55,17 @@ class InstallState:
     last_rebuilt_at: int | None
 
 
+@dataclass(frozen=True)
+class InstallArtifactAddition:
+    """One preserved artifact to append to an existing install record."""
+
+    state_id: int
+    artifact: dict[str, object]
+    archive_path: Path
+    archive_relative: Path
+    verification_check: str
+
+
 def save_install_state(
     engine: Engine,
     result: DownloadExecutionResult,
@@ -210,6 +221,50 @@ def list_install_states(engine: Engine) -> tuple[InstallState, ...]:
             select(GameInstall).order_by(GameInstall.game_title, GameInstall.version)
         ).scalars()
         return tuple(_to_state(row) for row in rows)
+
+
+def append_install_artifacts(
+    engine: Engine,
+    additions: tuple[InstallArtifactAddition, ...],
+) -> tuple[InstallState, ...]:
+    """Atomically append preserved local artifacts to recorded installs."""
+    if not additions:
+        return ()
+
+    hashes = {
+        addition.archive_path: hash_payload(addition.archive_path)
+        for addition in additions
+    }
+    updated_ids: list[int] = []
+    now = int(time.time())
+    with session_scope(engine) as session:
+        for addition in additions:
+            row = session.get(GameInstall, addition.state_id)
+            if row is None:
+                raise InstallStateNotFoundError(
+                    f"Recorded install #{addition.state_id} no longer exists"
+                )
+            artifacts = list(json.loads(row.artifacts_json or "[]"))
+            artifacts.append(addition.artifact)
+            archive_hashes = dict(json.loads(row.archive_hashes_json or "{}"))
+            archive_hashes[str(addition.archive_relative)] = hashes[
+                addition.archive_path
+            ]
+            verification = list(json.loads(row.verification_json or "[]"))
+            verification.append(addition.verification_check)
+            row.artifacts_json = json.dumps(artifacts, ensure_ascii=False)
+            row.archive_hashes_json = json.dumps(archive_hashes, ensure_ascii=False)
+            row.verification_json = json.dumps(verification, ensure_ascii=False)
+            row.updated_at = now
+            if row.id not in updated_ids:
+                updated_ids.append(row.id)
+        session.flush()
+        states = tuple(
+            _to_state(row)
+            for state_id in updated_ids
+            if (row := session.get(GameInstall, state_id)) is not None
+        )
+    return states
 
 
 def mark_rebuilt(

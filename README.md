@@ -15,6 +15,7 @@ changelog magnitude.
   - [Interactive download TUI](#interactive-download-tui)
   - [Multi-part games](#multi-part-games)
   - [Schema-constrained forum parsing](#schema-constrained-forum-parsing)
+- [Install a local patch or mod](#install-a-local-patch-or-mod)
 - [Rebuild a downloaded game](#rebuild-a-downloaded-game)
 - [Platform compatibility and contributing](#platform-compatibility-and-contributing)
 - [Tests](#tests)
@@ -331,6 +332,44 @@ may incur provider charges; subsequent identical runs use the cache. If the
 provider is unavailable, its schema mode is unsupported, or validation fails,
 VNMaster prints a warning and falls back to its deterministic parser. No model
 call bypasses CAPTCHA or Turnstile flows.
+
+## Install a local patch or mod
+
+Use a patch file, supported archive, or extracted mod folder that is already on
+your Mac without downloading the game again:
+
+```bash
+vnmaster install-local ~/Downloads/patch.rpa
+```
+
+VNMaster shows every available Ren'Py payload recorded by prior downloads.
+Multi-part games appear as one checkbox per part; installs containing several
+`.app` bundles expose each app separately. After target selection, VNMaster
+shows the exact destination, file-copy count, and overwrite count before asking
+for confirmation. A Finder item can also be dragged into the Terminal to fill
+the source path.
+
+For a native Finder drag-and-drop workflow, install the optional launcher once:
+
+```bash
+vnmaster install-droplet
+```
+
+This creates `~/Applications/VNMaster Patch Installer.app`. Drag one patch,
+archive, or mod folder onto it; Terminal opens directly into the same target
+picker and confirmation flow. Re-run with `--replace` after upgrading VNMaster
+if the executable location changes.
+
+Local inputs use the same archive safety checks and layout detection as fetched
+add-ons. The original payload is preserved under `archive/local-addons/`, and
+overwritten files are retained under `backups/local-addons/`. The add-on and its
+chosen app target are recorded in VNMaster's database so `vnmaster rebuild`
+reapplies it instead of silently removing it. If any selected target or the
+database update fails, changes made by that run are rolled back.
+
+For automation, target IDs are printed when the command runs without an
+interactive terminal. Pass `--target ID` more than once, or explicitly use
+`--all-targets`; combine either form with `--dry-run` or `--yes` as needed.
 
 ## Rebuild a downloaded game
 

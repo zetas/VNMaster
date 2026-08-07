@@ -36,6 +36,8 @@ def test_cli_has_subcommands() -> None:
     assert "fetch" in result.output
     assert "rebuild" in result.output
     assert "installs" in result.output
+    assert "install-local" in result.output
+    assert "install-droplet" in result.output
     assert "tui" in result.output
     for sub in ["digest", "bot", "init", "pair", "status"]:
         assert sub in result.output

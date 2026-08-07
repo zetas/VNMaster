@@ -124,3 +124,20 @@ def test_install_addon_requires_renpy_game(tmp_path: Path) -> None:
 
     with pytest.raises(AddonInstallError, match="Could not find"):
         install_addon(addon_root, game_root, platform="windows")
+
+
+def test_install_addon_rejects_target_parent_symlink_escape(tmp_path: Path) -> None:
+    game_root = tmp_path / "extracted-game"
+    target = _game_dir(game_root)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (target / "code").symlink_to(outside, target_is_directory=True)
+    addon_root = tmp_path / "addon"
+    patch = addon_root / "game" / "code" / "patch.rpy"
+    patch.parent.mkdir(parents=True)
+    patch.write_bytes(b"patch")
+
+    with pytest.raises(AddonInstallError, match="escapes through a symbolic link"):
+        install_addon(addon_root, game_root, platform="mac")
+
+    assert not (outside / "patch.rpy").exists()

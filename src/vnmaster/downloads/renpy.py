@@ -14,11 +14,7 @@ class RenPyLayoutError(RuntimeError):
 def find_renpy_game_dir(game_root: Path, *, platform: str | None) -> Path | None:
     """Return the active Ren'Py ``game`` directory for an extracted build."""
     normalized_platform = _normalize_platform(platform)
-    candidates = [
-        path
-        for path in (game_root, *game_root.rglob("game"))
-        if path.is_dir() and _contains_renpy_scripts(path)
-    ]
+    candidates = list(find_renpy_game_dirs(game_root))
     if not candidates:
         return None
     if len(candidates) == 1:
@@ -35,6 +31,25 @@ def find_renpy_game_dir(game_root: Path, *, platform: str | None) -> Path | None
     choices = ", ".join(str(path.relative_to(game_root)) for path in candidates)
     raise RenPyLayoutError(
         f"Found multiple Ren'Py game directories and could not choose one: {choices}"
+    )
+
+
+def find_renpy_game_dirs(game_root: Path) -> tuple[Path, ...]:
+    """Return every Ren'Py ``game`` directory below an extracted build.
+
+    Downloads normally need one unambiguous active directory, while the local
+    add-on picker deliberately exposes every app/season as a separate target.
+    """
+    candidates = [
+        path
+        for path in (game_root, *game_root.rglob("game"))
+        if path.is_dir() and _contains_renpy_scripts(path)
+    ]
+    return tuple(
+        sorted(
+            candidates,
+            key=lambda path: (len(path.relative_to(game_root).parts), str(path)),
+        )
     )
 
 

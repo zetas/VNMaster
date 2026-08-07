@@ -230,3 +230,54 @@ def test_legacy_rebuild_leaves_no_part_dirs(tmp_path: Path) -> None:
 
     assert (state.install_path / "game").is_dir()
     assert not any(p.name.startswith("Part ") for p in state.install_path.iterdir())
+
+
+def test_rebuild_reapplies_local_addon_to_recorded_app_target(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+    addon_archive = state.install_path / "archive" / "local-addons" / "patch.rpa"
+    addon_archive.parent.mkdir(parents=True)
+    addon_archive.write_bytes(b"local patch")
+    local_artifact = {
+        "kind": "addon",
+        "title": "Local Patch",
+        "archive_paths": ["archive/local-addons/patch.rpa"],
+        "output_path": "game/Second.app/Contents/Resources/autorun/game",
+        "installable": True,
+        "local": True,
+        "renpy_target": "Second.app/Contents/Resources/autorun/game",
+    }
+    state = state.__class__(
+        **{
+            **state.__dict__,
+            "artifacts": state.artifacts + (local_artifact,),
+            "archive_hashes": {
+                **state.archive_hashes,
+                "archive/local-addons/patch.rpa": hash_payload(addon_archive),
+            },
+        }
+    )
+
+    def unpacker(downloaded: list[Path], destination: Path) -> None:
+        if downloaded[0].name == "game.zip":
+            for app in ("First.app", "Second.app"):
+                game_dir = destination / app / "Contents" / "Resources" / "autorun" / "game"
+                game_dir.mkdir(parents=True)
+                if app == "Second.app":
+                    (game_dir / "script.rpyc").write_bytes(b"clean")
+            return
+        destination.mkdir(parents=True)
+        (destination / downloaded[0].name).write_bytes(downloaded[0].read_bytes())
+
+    rebuild_install(
+        state,
+        urm_mods_dir=_mods_dir(tmp_path),
+        unpacker=unpacker,
+    )
+
+    game_root = state.install_path / "game"
+    assert not (
+        game_root / "First.app" / "Contents" / "Resources" / "autorun" / "game" / "patch.rpa"
+    ).exists()
+    assert (
+        game_root / "Second.app" / "Contents" / "Resources" / "autorun" / "game" / "patch.rpa"
+    ).read_bytes() == b"local patch"
