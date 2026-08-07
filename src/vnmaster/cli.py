@@ -1113,6 +1113,192 @@ def installs(config_path: Path | None) -> None:
         )
 
 
+@main.command("install-local")
+@click.argument(
+    "source",
+    type=click.Path(exists=True, readable=True, resolve_path=True, path_type=Path),
+)
+@click.option("--name", default=None, help="Display name recorded for this patch or mod.")
+@click.option(
+    "--target",
+    "target_ids",
+    multiple=True,
+    help="Target ID or 1-based target number; repeat to select several.",
+)
+@click.option(
+    "--all-targets",
+    is_flag=True,
+    default=False,
+    help="Apply to every available recorded Ren'Py target.",
+)
+@click.option("--dry-run", is_flag=True, default=False, help="Preview without changing files.")
+@click.option("--yes", "assume_yes", is_flag=True, default=False, help="Skip confirmation.")
+@click.option(
+    "--config", "config_path", type=click.Path(exists=True, path_type=Path),
+    default=None, help="Path to config.toml",
+)
+def install_local(
+    source: Path,
+    name: str | None,
+    target_ids: tuple[str, ...],
+    all_targets: bool,
+    dry_run: bool,
+    assume_yes: bool,
+    config_path: Path | None,
+) -> None:
+    """Install a local patch, archive, file, or mod folder into selected games."""
+    from vnmaster.downloads.local_addons import (
+        LocalAddonError,
+        discover_local_addon_targets,
+        install_local_addon,
+        prepare_local_addon,
+        preview_local_addon,
+    )
+
+    if all_targets and target_ids:
+        raise click.UsageError("Use either --all-targets or --target, not both.")
+    _paths, _cfg, engine = _load_engine_and_paths(config_path)
+    inventory = discover_local_addon_targets(engine)
+    for warning in inventory.warnings:
+        click.echo(f"Warning: {warning}", err=True)
+    if not inventory.targets:
+        raise click.ClickException("No available recorded Ren'Py game targets were found.")
+
+    try:
+        selected = _select_local_addon_targets(
+            inventory.targets,
+            target_ids=target_ids,
+            all_targets=all_targets,
+            assume_yes=assume_yes,
+        )
+        with prepare_local_addon(source, name=name) as prepared:
+            plan = preview_local_addon(prepared, selected)
+            click.echo(f"Local add-on: {plan.prepared.name}")
+            click.echo(f"Source: {plan.prepared.source}")
+            click.echo("Targets:")
+            for item in plan.targets:
+                click.echo(
+                    f"  - {item.target.label}: {item.preview.files_to_install} files, "
+                    f"{item.preview.files_to_overwrite} overwritten -> "
+                    f"{item.preview.target_dir}"
+                )
+            click.echo(
+                f"Total: {len(plan.targets)} targets · {plan.files_to_install} file copies · "
+                f"{plan.files_to_overwrite} overwrites"
+            )
+            if dry_run:
+                click.echo("Dry run; no files changed.")
+                return
+            if not assume_yes and not click.confirm(
+                "Preserve and install this local add-on?"
+            ):
+                click.echo("Cancelled.")
+                return
+            result = install_local_addon(engine, plan)
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        if isinstance(exc, LocalAddonError):
+            raise click.ClickException(str(exc)) from exc
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"Installed {result.name} into {len(result.targets)} target(s).")
+    for installed_target in result.targets:
+        click.echo(f"  ✓ {installed_target.target.label}")
+        click.echo(f"    Preserved: {installed_target.archive_path}")
+        click.echo(f"    Overwrite backup: {installed_target.backup_path}")
+
+
+@main.command("install-droplet")
+@click.option(
+    "--destination",
+    type=click.Path(path_type=Path),
+    default="~/Applications/VNMaster Patch Installer.app",
+    show_default=True,
+    help="macOS application destination.",
+)
+@click.option(
+    "--executable",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="VNMaster executable embedded in the launcher.",
+)
+@click.option("--replace", is_flag=True, default=False, help="Replace an existing droplet.")
+def install_droplet(
+    destination: Path,
+    executable: Path | None,
+    replace: bool,
+) -> None:
+    """Install the macOS Finder drag-and-drop patch launcher."""
+    import shutil
+
+    from vnmaster.macos_droplet import install_patch_droplet
+
+    resolved_executable = executable
+    if resolved_executable is None:
+        found = shutil.which("vnmaster")
+        if found is None:
+            raise click.ClickException("Could not locate the vnmaster executable")
+        resolved_executable = Path(found)
+    try:
+        installed = install_patch_droplet(
+            destination,
+            executable=resolved_executable,
+            replace=replace,
+        )
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Installed Finder droplet: {installed}")
+    click.echo("Drag one patch file, archive, or mod folder onto it to choose targets.")
+
+
+def _select_local_addon_targets(
+    targets: tuple[Any, ...],
+    *,
+    target_ids: tuple[str, ...],
+    all_targets: bool,
+    assume_yes: bool,
+) -> tuple[Any, ...]:
+    if all_targets:
+        return targets
+    if target_ids:
+        selected: list[Any] = []
+        for value in target_ids:
+            matches = [
+                target
+                for index, target in enumerate(targets, start=1)
+                if value == target.id or value == str(index)
+            ]
+            if len(matches) != 1:
+                raise click.UsageError(f"Unknown or ambiguous local add-on target: {value}")
+            if matches[0] not in selected:
+                selected.append(matches[0])
+        return tuple(selected)
+    if assume_yes:
+        raise click.UsageError("--yes requires --target or --all-targets.")
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        choices = [
+            questionary.Choice(title=target.label, value=target.id, checked=False)
+            for target in targets
+        ]
+        answer = questionary.checkbox(
+            "Choose games that should receive this patch or mod",
+            choices=choices,
+            instruction="(Space toggle, Enter continue)",
+        ).ask()
+        if not answer:
+            raise click.ClickException("No game targets selected; nothing changed.")
+        selected_ids = set(answer)
+        return tuple(target for target in targets if target.id in selected_ids)
+
+    click.echo("Available local add-on targets:")
+    for index, target in enumerate(targets, start=1):
+        click.echo(f"  {index}. {target.label} [{target.id}]")
+    raise click.UsageError(
+        "Non-interactive use requires --target (repeatable) or --all-targets."
+    )
+
+
 def _print_download_candidates(plan: DownloadPlan, destination: Path) -> None:
     click.echo(
         f"Resolved: {plan.game.title} · {plan.game.version or 'unknown version'} "

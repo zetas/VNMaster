@@ -53,6 +53,12 @@ class AddonInstallPreview:
     readme: Path | None
 
 
+@dataclass(frozen=True)
+class AddonMergePath:
+    source: Path
+    target: Path
+
+
 def should_install_addon(artifact: PlannedArtifact) -> bool:
     """Return whether an optional artifact is a game-modifying add-on."""
     if artifact.kind != "addon":
@@ -105,6 +111,17 @@ def preview_addon(
             "Could not find a Ren'Py game directory for add-on installation"
         )
 
+    return preview_addon_for_game_dir(addon_root, game_dir)
+
+
+def preview_addon_for_game_dir(
+    addon_root: Path,
+    game_dir: Path,
+) -> AddonInstallPreview:
+    """Resolve an add-on merge for an explicitly selected Ren'Py directory."""
+    if not game_dir.is_dir():
+        raise AddonInstallError(f"Ren'Py game directory does not exist: {game_dir}")
+
     readme = _find_readme(addon_root)
     packaged_game_dir = _find_packaged_game_dir(addon_root)
     if packaged_game_dir is not None:
@@ -128,6 +145,27 @@ def preview_addon(
         overwritten,
         readme,
     )
+
+
+def addon_merge_paths(preview: AddonInstallPreview) -> tuple[AddonMergePath, ...]:
+    """Return the paths an add-on merge may create or replace."""
+    changes: list[AddonMergePath] = []
+    for source in sorted(
+        preview.source_root.rglob("*"),
+        key=lambda path: (
+            len(path.relative_to(preview.source_root).parts),
+            str(path),
+        ),
+    ):
+        relative = source.relative_to(preview.source_root)
+        if _ignore_relative(relative) or _is_readme(source):
+            continue
+        if source.is_symlink():
+            raise AddonInstallError(f"Add-on contains a symbolic link: {relative}")
+        target = preview.target_dir / relative
+        _validate_target_parent(preview.target_dir, target)
+        changes.append(AddonMergePath(source, target))
+    return tuple(changes)
 
 
 def _find_packaged_game_dir(addon_root: Path) -> Path | None:
@@ -206,6 +244,7 @@ def _merge_tree(source_root: Path, target_root: Path) -> tuple[int, int]:
         if source.is_symlink():
             raise AddonInstallError(f"Add-on contains a symbolic link: {relative}")
         target = target_root / relative
+        _validate_target_parent(target_root, target)
         if source.is_dir():
             if target.is_symlink() or (target.exists() and not target.is_dir()):
                 target.unlink()
@@ -237,6 +276,7 @@ def _count_merge(source_root: Path, target_root: Path) -> tuple[int, int]:
         if not source.is_file():
             raise AddonInstallError(f"Add-on contains an unsupported file: {relative}")
         target = target_root / relative
+        _validate_target_parent(target_root, target)
         installed += 1
         overwritten += int(target.exists() or target.is_symlink())
     return installed, overwritten
@@ -256,3 +296,19 @@ def _is_readme(path: Path) -> bool:
         and path.suffix.casefold() in _README_SUFFIXES
         and bool(_README_RE.match(path.stem))
     )
+
+
+def _validate_target_parent(target_root: Path, target: Path) -> None:
+    """Reject an existing parent symlink that would escape the selected game."""
+    root = target_root.resolve()
+    parent = target.parent
+    while not parent.exists() and not parent.is_symlink() and parent != target_root:
+        parent = parent.parent
+    try:
+        resolved_parent = parent.resolve()
+    except OSError as exc:
+        raise AddonInstallError(f"Could not resolve add-on target parent: {parent}") from exc
+    if not resolved_parent.is_relative_to(root):
+        raise AddonInstallError(
+            f"Add-on target escapes through a symbolic link: {target}"
+        )

@@ -14,6 +14,7 @@ from vnmaster.downloads.addon_installer import (
     AddonInstallResult,
     apply_addon_preview,
     preview_addon,
+    preview_addon_for_game_dir,
 )
 from vnmaster.downloads.archives import unpack_payload
 from vnmaster.downloads.state import InstallState, InstallStateError, hash_payload
@@ -176,11 +177,18 @@ def _rebuild_single(
                 index=index,
                 unpacker=unpacker,
             )
-            preview = preview_addon(
-                addon_root,
-                staging / "game",
-                platform=state.platform,
-            )
+            renpy_target = artifact.get("renpy_target")
+            if isinstance(renpy_target, str):
+                preview = preview_addon_for_game_dir(
+                    addon_root,
+                    staging / "game" / renpy_target,
+                )
+            else:
+                preview = preview_addon(
+                    addon_root,
+                    staging / "game",
+                    platform=state.platform,
+                )
             reporter(
                 f"Rebuild add-on preview for {artifact.get('title', 'add-on')!r}: "
                 f"{preview.files_to_install} files "
