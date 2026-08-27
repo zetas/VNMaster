@@ -582,3 +582,27 @@ def test_embedded_forum_thread_is_not_offered_as_a_file() -> None:
         game, [], platform_priority=["mac"], preferred_hosts=["mega"]
     )
     assert [artifact.kind for artifact in plan.artifacts] == ["game"]
+
+
+def test_addon_version_tolerates_xpath_locators() -> None:
+    game = _thread(1, "A Game", "v1.2", (_group("Mac"),))
+    addon = _thread(
+        2,
+        "A Game Multi-Mod",
+        "v1.2",
+        (
+            DownloadGroup(
+                "",
+                (
+                    DownloadMirror(
+                        "MEGA", "//a[starts-with(@href,'https://mega.nz/')][1]"
+                    ),
+                ),
+            ),
+        ),
+    )
+    plan = build_download_plan(
+        game, [addon], platform_priority=["mac"], preferred_hosts=["mega"]
+    )
+    assert plan.artifacts[1].locator == "//a[starts-with(@href,'https://mega.nz/')][1]"
+    assert plan.artifacts[1].version == "v1.2"
