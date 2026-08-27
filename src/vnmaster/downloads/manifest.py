@@ -24,6 +24,9 @@ from vnmaster.magnitude import version_tokens
 
 
 MANIFEST_SCHEMA_VERSION = 1
+# Add-ons whose artifact or chosen-variant confidence falls below this are left out of
+# the plan. The forum parser prompt quotes the same number so the model knows the cut.
+ADDON_CONFIDENCE_FLOOR = 0.70
 ShortText = Annotated[str, Field(max_length=200)]
 BoundedText = Annotated[str, Field(max_length=500)]
 _PART_RE = re.compile(r"\b(part|pt|chapter|ch|episode|ep|volume|vol)\s*[.#-]?(\d+)\b", re.I)
@@ -372,12 +375,12 @@ def build_download_plan_from_manifest(
             continue
         if (
             artifact.kind == "addon"
-            and min(artifact.confidence, variant.confidence) < 0.7
+            and min(artifact.confidence, variant.confidence) < ADDON_CONFIDENCE_FLOOR
         ):
             skipped.append(
                 SkippedArtifact(
                     artifact.title,
-                    "LLM classification confidence is below 0.70",
+                    f"LLM classification confidence is below {ADDON_CONFIDENCE_FLOOR:.2f}",
                 )
             )
             continue
@@ -470,8 +473,10 @@ def build_download_plan_from_manifest(
             warning_parts.append(
                 "mirror grouping is unresolved; using the preferred link without fallbacks"
             )
-        if min(artifact.confidence, variant.confidence) < 0.7:
-            warning_parts.append("LLM classification confidence is below 0.70")
+        if min(artifact.confidence, variant.confidence) < ADDON_CONFIDENCE_FLOOR:
+            warning_parts.append(
+                f"LLM classification confidence is below {ADDON_CONFIDENCE_FLOOR:.2f}"
+            )
         install_action: Literal["merge", "separate"] | None = None
         if artifact.kind == "addon":
             install_action = effective_addon_action
@@ -751,10 +756,10 @@ def _choose_variant(
 def _most_confident(variants: list[ManifestVariant]) -> ManifestVariant:
     """Pick the best-evidenced variant so one weak reading cannot sink an add-on.
 
-    A low-confidence variant is dropped by the 0.70 gate in the caller. Taking
-    the first listed variant let an unplaceable extra file discard the whole
-    add-on even when a confident variant named the real payload. Ties keep the
-    manifest's own order.
+    A low-confidence variant is dropped by the ADDON_CONFIDENCE_FLOOR gate in
+    the caller. Taking the first listed variant let an unplaceable extra file
+    discard the whole add-on even when a confident variant named the real
+    payload. Ties keep the manifest's own order.
     """
     return max(variants, key=lambda variant: variant.confidence)
 

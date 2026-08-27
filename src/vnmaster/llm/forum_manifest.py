@@ -16,6 +16,7 @@ from vnmaster.db.engine import session_scope
 from vnmaster.db.models import ForumManifestExtraction
 from vnmaster.downloads.manifest import (
     AddonManifestArtifact,
+    ADDON_CONFIDENCE_FLOOR,
     MANIFEST_SCHEMA_VERSION,
     DownloadManifest,
     GameManifestArtifact,
@@ -506,8 +507,22 @@ _OUTPUT_RULES = [
     "one story split into independently downloadable releases is multipart",
     "create one game artifact per numbered part, with its own version when stated",
     "required is true only for game artifacts; add-ons are optional",
-    "variants separate platforms; link_ids in a variant may be mirrors only when supported",
+    (
+        "variants are alternatives of one artifact where exactly one is chosen, such as "
+        "one build per platform; link_ids inside a variant may be mirrors of the same "
+        "file only when the post supports that"
+    ),
+    (
+        "when an add-on is several standalone files that are each installed, emit one "
+        "artifact per file rather than one artifact with a variant per file"
+    ),
     "use mirror_group 'unresolved' instead of forcing uncertain links together",
+    (
+        "confidence decides inclusion: an add-on whose artifact or variant confidence is "
+        f"below {ADDON_CONFIDENCE_FLOOR:.2f} is left out of the download plan, so score "
+        "how sure you are the item should be downloaded as identified, not how well you "
+        "understand the post"
+    ),
     "a forum thread, homepage, or instructions page is delivery manual and action manual",
     "mods and patches that copy into a game use merge; documents use separate",
     (
