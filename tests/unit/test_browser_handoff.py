@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 from vnmaster.browser_handoff import (
     capture_recent_provider_url,
     zen_history_available,
@@ -68,3 +70,30 @@ def test_capture_recent_provider_url_returns_none_without_new_match(tmp_path: Pa
         )
 
     assert capture_recent_provider_url("GOFILE", since_us=200, zen_root=root) is None
+
+
+def test_capture_recent_provider_url_handles_more_than_four_hosts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vnmaster import browser_handoff
+
+    monkeypatch.setitem(
+        browser_handoff._PROVIDER_HOSTS,
+        "gofile",
+        ("gofile.io", "www.gofile.io", "a.gofile.io", "b.gofile.io", "c.gofile.io"),
+    )
+    root, places = _zen_root(tmp_path)
+    with sqlite3.connect(places) as connection:
+        connection.execute(
+            "INSERT INTO moz_places (id, url) VALUES (?, ?)",
+            (1, "https://gofile.io/d/current"),
+        )
+        connection.execute(
+            "INSERT INTO moz_historyvisits (place_id, visit_date) VALUES (?, ?)",
+            (1, 250),
+        )
+
+    assert (
+        capture_recent_provider_url("GOFILE", since_us=200, zen_root=root)
+        == "https://gofile.io/d/current"
+    )

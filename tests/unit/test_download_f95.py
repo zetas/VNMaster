@@ -449,3 +449,30 @@ def test_resolve_redacted_locator_uses_masked_ajax_redirect() -> None:
         assert resolve_redacted_locator(
             locator, thread_url="unused", client=client
         ) == "https://pixeldrain.com/u/abc123"
+
+
+def test_scrape_prefers_the_post_body_over_the_article_chrome() -> None:
+    from vnmaster.downloads.f95 import _scrape_thread_download_groups
+
+    html = """
+    <article class="message-threadStarterPost">
+      <div class="bbWrapper">
+        <p>DOWNLOAD<br><a href="https://mega.nz/file/inside">MEGA</a></p>
+      </div>
+      <footer>
+        <p>Download <a href="https://pixeldrain.com/u/outside">PIXELDRAIN</a></p>
+      </footer>
+    </article>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=html)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        groups = _scrape_thread_download_groups(
+            "https://f95zone.to/threads/example.1/", client=client
+        )
+
+    assert {mirror.locator for group in groups for mirror in group.mirrors} == {
+        "https://mega.nz/file/inside"
+    }

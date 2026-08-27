@@ -5,12 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-import re
 import time
 from typing import Literal, Protocol
 
 import httpx
-from sqlalchemy import Engine
 
 from vnmaster.config import Config, Secrets
 from vnmaster.db.engine import create_engine_for, ensure_schema
@@ -35,7 +33,7 @@ from vnmaster.downloads.service import (
     execute_multipart_plan,
     execute_optional_downloads,
 )
-from vnmaster.downloads.state import list_install_states, save_install_state
+from vnmaster.downloads.state import installed_part_versions, save_install_state
 from vnmaster.downloads.workflow import (
     ThreadDiscovery,
     build_plan_from_discovery,
@@ -208,7 +206,7 @@ class VNMasterFetchBackend:
             detection=detection,
             parser_summary=parser_summary,
             notes=tuple(notes),
-            installed_parts=_installed_part_versions(self.engine, discovery.game.thread_id),
+            installed_parts=installed_part_versions(self.engine, discovery.game.thread_id),
             include_addons=include_addons,
         )
 
@@ -423,16 +421,3 @@ def _resolved(mirror: DownloadMirror, url: str) -> ResolvedDownload:
     )
 
 
-def _installed_part_versions(engine: Engine, thread_id: int) -> dict[int, str]:
-    installed: dict[int, str] = {}
-    for state in list_install_states(engine):
-        if state.f95_thread_id != thread_id or not state.version:
-            continue
-        for entry in state.artifacts:
-            label = entry.get("part")
-            if not isinstance(label, str):
-                continue
-            match = re.search(r"(\d+)\s*$", label)
-            if match:
-                installed[int(match.group(1))] = state.version
-    return installed

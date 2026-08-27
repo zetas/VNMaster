@@ -773,11 +773,13 @@ def fetch(
                         click.echo(f"  {part.number}. {part.label}")
                     click.echo("Re-run with --parts to plan specific parts.")
                     return
+                from vnmaster.downloads.state import installed_part_versions
+
                 selected_parts = _resolve_part_selection(
                     detection,
                     parts_option,
                     assume_yes=assume_yes,
-                    installed=_installed_part_versions(
+                    installed=installed_part_versions(
                         engine, discovery.game.thread_id
                     ),
                 )
@@ -1148,7 +1150,6 @@ def install_local(
 ) -> None:
     """Install a local patch, archive, file, or mod folder into selected games."""
     from vnmaster.downloads.local_addons import (
-        LocalAddonError,
         discover_local_addon_targets,
         install_local_addon,
         prepare_local_addon,
@@ -1198,8 +1199,6 @@ def install_local(
     except click.ClickException:
         raise
     except Exception as exc:
-        if isinstance(exc, LocalAddonError):
-            raise click.ClickException(str(exc)) from exc
         raise click.ClickException(str(exc)) from exc
 
     click.echo(f"Installed {result.name} into {len(result.targets)} target(s).")
@@ -1591,20 +1590,3 @@ def _prompt_part_selection_fallback(detection: PartDetection) -> tuple[int, ...]
         return selected
 
 
-def _installed_part_versions(engine: Engine, thread_id: int) -> dict[int, str]:
-    import re as _re
-
-    from vnmaster.downloads.state import list_install_states
-
-    installed: dict[int, str] = {}
-    for state in list_install_states(engine):
-        if state.f95_thread_id != thread_id or not state.version:
-            continue
-        for entry in state.artifacts:
-            label = entry.get("part")
-            if not isinstance(label, str):
-                continue
-            match = _re.search(r"(\d+)\s*$", label)
-            if match:
-                installed[int(match.group(1))] = state.version
-    return installed

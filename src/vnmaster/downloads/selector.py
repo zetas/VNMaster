@@ -26,7 +26,7 @@ _REJECT_GAME_GROUP_RE = re.compile(r"android|compressed|update|patch|hotfix", re
 _REJECT_ADDON_GROUP_RE = re.compile(r"android|compressed", re.I)
 _OPTIONAL_GROUP_RE = _ADDON_RE
 _ADDON_VERSION_RE = re.compile(r"\bv?(\d+(?:\.\d+)+(?:[a-z][a-z0-9]*)?)", re.I)
-_INCREMENTAL_UPDATE_RE = re.compile(
+INCREMENTAL_UPDATE_RE = re.compile(
     r"\b(?:update|upgrade)\s+patch\b|\b(?:incremental|delta)\s+(?:patch|update|build)\b",
     re.I,
 )
@@ -243,7 +243,7 @@ def build_download_plan(
             selected_parts=selected_parts,
         )
         for embedded_artifact in embedded:
-            if _INCREMENTAL_UPDATE_RE.search(embedded_artifact.group_name):
+            if INCREMENTAL_UPDATE_RE.search(embedded_artifact.group_name):
                 skipped.append(
                     SkippedArtifact(
                         embedded_artifact.title,
@@ -254,7 +254,7 @@ def build_download_plan(
                 selected.append(embedded_artifact)
 
     for addon in addons if include_addons else []:
-        if _INCREMENTAL_UPDATE_RE.search(addon.title):
+        if INCREMENTAL_UPDATE_RE.search(addon.title):
             skipped.append(
                 SkippedArtifact(
                     addon.title,

@@ -19,7 +19,11 @@ from vnmaster.downloads.models import (
     ThreadInfo,
 )
 from vnmaster.downloads.f95 import extract_thread_id, is_likely_download_locator
-from vnmaster.downloads.selector import addon_matches_game, select_addon_artifact
+from vnmaster.downloads.selector import (
+    INCREMENTAL_UPDATE_RE,
+    addon_matches_game,
+    select_addon_artifact,
+)
 from vnmaster.magnitude import version_tokens
 
 
@@ -37,10 +41,6 @@ _OPTIONAL_RE = re.compile(
 )
 _MERGE_ADDON_RE = re.compile(
     r"\b(?:mod|patch|hotfix|fix|cheat|gallery|unlock(?:er)?|translation|uncensor)\b",
-    re.I,
-)
-_INCREMENTAL_UPDATE_RE = re.compile(
-    r"\b(?:update|upgrade)\s+patch\b|\b(?:incremental|delta)\s+(?:patch|update|build)\b",
     re.I,
 )
 
@@ -353,7 +353,7 @@ def build_download_plan_from_manifest(
     for artifact in manifest.artifacts:
         if artifact.kind == "addon" and not include_addons:
             continue
-        if artifact.kind == "addon" and _INCREMENTAL_UPDATE_RE.search(artifact.title):
+        if artifact.kind == "addon" and INCREMENTAL_UPDATE_RE.search(artifact.title):
             skipped.append(
                 SkippedArtifact(
                     artifact.title,
@@ -421,7 +421,7 @@ def build_download_plan_from_manifest(
             artifact.kind == "addon"
             and bool(records)
             and all(
-                is_likely_download_locator(record.locator, label=record.label)
+                is_likely_download_locator(record.locator)
                 for record in records
             )
             and effective_addon_action is not None

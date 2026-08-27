@@ -380,10 +380,9 @@ def _scrape_thread_download_groups(
     )
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
-    post = soup.select_one(
-        "article.message-threadStarterPost .bbWrapper, "
-        "article.message-threadStarterPost"
-    )
+    post = soup.select_one("article.message-threadStarterPost .bbWrapper")
+    if post is None:
+        post = soup.select_one("article.message-threadStarterPost")
     if post is None:
         return ()
 
@@ -428,7 +427,7 @@ def _download_groups_from_container(
         for anchor in row.select("a[href]"):
             href = urljoin(base_url, str(anchor.get("href") or ""))
             label = anchor.get_text(" ", strip=True)
-            if href in claimed or not _looks_like_direct_download(href, label):
+            if href in claimed or not _looks_like_direct_download(href):
                 continue
             claimed.add(href)
             mirrors.append(DownloadMirror(_download_host_name(href, label), href))
@@ -535,7 +534,7 @@ def _related_download_pages(
     page_urls: list[str] = []
     for anchor in container.select("a[href]"):
         href = urljoin(base_url, str(anchor.get("href") or ""))
-        if _looks_like_direct_download(href, anchor.get_text(" ", strip=True)):
+        if _looks_like_direct_download(href):
             continue
         parent = anchor.find_parent(["p", "li", "td", "div"])
         context = " ".join(
@@ -571,11 +570,11 @@ def _related_download_pages(
     return post_urls, page_urls
 
 
-def _looks_like_direct_download(url: str, label: str) -> bool:
-    return is_likely_download_locator(url, label=label)
+def _looks_like_direct_download(url: str) -> bool:
+    return is_likely_download_locator(url)
 
 
-def is_likely_download_locator(locator: str, *, label: str = "") -> bool:
+def is_likely_download_locator(locator: str) -> bool:
     """Return whether a registered locator represents a payload, not a page."""
     if locator.startswith("//a["):
         return True
@@ -609,7 +608,7 @@ def _is_download_attachment(url: str) -> bool:
 
 def _looks_like_external_download(url: str) -> bool:
     """Backward-compatible predicate for tests and callers of the scraper."""
-    return _looks_like_direct_download(url, "")
+    return _looks_like_direct_download(url)
 
 
 def _download_host_name(url: str, label: str) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -368,3 +369,19 @@ def _ambiguous_state(query: str, states: list[InstallState]) -> AmbiguousInstall
         f"{state.game_title} {state.version or ''} ({state.install_path})" for state in states
     )
     return AmbiguousInstallStateError(f"Multiple recorded installs match {query!r}: {choices}")
+
+
+def installed_part_versions(engine: Engine, thread_id: int) -> dict[int, str]:
+    """Map installed part numbers for ``thread_id`` to the version recorded for them."""
+    installed: dict[int, str] = {}
+    for state in list_install_states(engine):
+        if state.f95_thread_id != thread_id or not state.version:
+            continue
+        for entry in state.artifacts:
+            label = entry.get("part")
+            if not isinstance(label, str):
+                continue
+            match = re.search(r"(\d+)\s*$", label)
+            if match:
+                installed[int(match.group(1))] = state.version
+    return installed

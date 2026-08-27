@@ -81,21 +81,20 @@ def _query_history_snapshot(
                 shutil.copy2(source, snapshot.with_name(snapshot.name + suffix))
 
         patterns = tuple(f"https://{host}/%" for host in hosts)
-        padded_patterns = (*patterns, *("",) * (4 - len(patterns)))
-        query = """
+        # One placeholder per host; the clause text is constant, only values bind.
+        placeholders = " OR ".join(["p.url LIKE ?"] * len(patterns))
+        query = f"""
             SELECT p.url, MAX(v.visit_date) AS latest_visit
             FROM moz_places AS p
             JOIN moz_historyvisits AS v ON v.place_id = p.id
             WHERE v.visit_date >= ?
-              AND (
-                  p.url LIKE ? OR p.url LIKE ? OR p.url LIKE ? OR p.url LIKE ?
-              )
+              AND ({placeholders})
             GROUP BY p.url
             ORDER BY latest_visit DESC
             LIMIT 20
         """
         with sqlite3.connect(snapshot) as connection:
-            rows = connection.execute(query, (since_us, *padded_patterns)).fetchall()
+            rows = connection.execute(query, (since_us, *patterns)).fetchall()
     return tuple(str(row[0]) for row in rows if isinstance(row[0], str))
 
 
