@@ -429,10 +429,24 @@ def select_addon_artifact(
     return None
 
 
+def _locator_path(locator: str) -> str | None:
+    """Return a locator's URL path, or None when it is an XPath selector."""
+    if locator.startswith("//"):
+        return None
+    try:
+        return unquote(urlsplit(locator).path)
+    except ValueError:
+        return None
+
+
 def _addon_version(addon: ThreadInfo, group: DownloadGroup) -> str | None:
     """Prefer a selected payload's version over a stale add-on thread title."""
     candidates = [group.name]
-    candidates.extend(unquote(urlsplit(mirror.locator).path) for mirror in group.mirrors)
+    candidates.extend(
+        path
+        for path in (_locator_path(mirror.locator) for mirror in group.mirrors)
+        if path is not None
+    )
     for candidate in candidates:
         match = _ADDON_VERSION_RE.search(candidate)
         if match is not None:
