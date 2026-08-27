@@ -94,6 +94,17 @@ def test_provider_name_uses_locator_instead_of_descriptive_link_caption() -> Non
     ) == "PROTONDRIVE"
 
 
+def test_provider_name_accepts_http_xpath_locator() -> None:
+    from vnmaster.downloads.models import DownloadMirror
+
+    assert provider_name(
+        DownloadMirror("MEGA", "//a[starts-with(@href,'http://mega.nz/')][1]")
+    ) == "MEGA"
+    assert provider_name(
+        DownloadMirror("MEGA", "//a[starts-with(@href,'https://mega.nz/')][1]")
+    ) == "MEGA"
+
+
 def _artifact_p(kind: str, title: str, part: str | None = None) -> PlannedArtifact:
     return PlannedArtifact(
         kind=kind, title=title, version="v1", thread_id=1,

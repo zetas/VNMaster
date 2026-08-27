@@ -217,7 +217,7 @@ def provider_name(mirror: DownloadMirror) -> str:
     destination encoded in the locator or deselecting MEGA would not reliably
     remove every MEGA mirror.
     """
-    url_match = re.search(r"https://[^'\"\s)\]]+", mirror.locator, re.I)
+    url_match = re.search(r"https?://[^'\"\s)\]]+", mirror.locator, re.I)
     locator = url_match.group(0) if url_match is not None else mirror.locator
     parsed = urlsplit(locator)
     hostname = (parsed.hostname or "").casefold()
