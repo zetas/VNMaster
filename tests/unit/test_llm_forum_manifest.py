@@ -4,12 +4,17 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from vnmaster.config import ForumParserConfig
 from vnmaster.db.engine import create_engine_for, ensure_schema
 from vnmaster.downloads.models import DownloadGroup, DownloadMirror, ThreadInfo
-from vnmaster.downloads.manifest import DownloadManifest
+from vnmaster.downloads.manifest import ADDON_CONFIDENCE_FLOOR, DownloadManifest
+import vnmaster.llm.forum_manifest as forum_manifest_module
 from vnmaster.llm.forum_manifest import (
     ForumManifestInterpreter,
+    _OUTPUT_RULES,
+    _content_hash,
     _drop_unsafe_game_classifications,
     _schema_for_link_ids,
     _unique_artifact_id,
@@ -260,3 +265,19 @@ def test_suspicious_patch_is_dropped_from_required_games() -> None:
     )
     _drop_unsafe_game_classifications(manifest, expected_part_number=6)
     assert [artifact.artifact_id for artifact in manifest.artifacts] == ["part-6"]
+
+
+def test_output_rules_quote_the_addon_confidence_floor() -> None:
+    floor_text = f"{ADDON_CONFIDENCE_FLOOR:.2f}"
+    assert any(floor_text in rule for rule in _OUTPUT_RULES)
+
+
+def test_prompt_version_changes_the_content_hash(monkeypatch: pytest.MonkeyPatch) -> None:
+    thread = ThreadInfo(10, "Story", None, None, "https://f95zone.to/threads/.10/", ())
+    settings = ForumParserConfig(enabled=True)
+    baseline = _content_hash(thread, "", settings)
+
+    monkeypatch.setattr(forum_manifest_module, "PROMPT_VERSION", 999)
+
+    bumped = _content_hash(thread, "", settings)
+    assert baseline != bumped
