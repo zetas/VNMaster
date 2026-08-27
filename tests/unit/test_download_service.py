@@ -785,3 +785,20 @@ def test_optional_only_failure_does_not_discard_a_successful_sibling(
     assert len(result.failures) == 1
     assert result.failures[0].part == "Walkthrough Mod"
     assert "browser confirmation required" in result.failures[0].error
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["Part 1", "Chapter 2", "Episode 3", "Volume 4", "Book 5", "Act 6", "Season 7", "Ch. 8"],
+)
+def test_optional_scope_root_scopes_every_part_family(tmp_path: Path, label: str) -> None:
+    from vnmaster.downloads.service import _optional_scope_root
+
+    assert _optional_scope_root(tmp_path, label) == tmp_path / label
+
+
+def test_optional_scope_root_ignores_labels_that_are_not_parts(tmp_path: Path) -> None:
+    from vnmaster.downloads.service import _optional_scope_root
+
+    assert _optional_scope_root(tmp_path, None) == tmp_path
+    assert _optional_scope_root(tmp_path, "Walkthrough") == tmp_path

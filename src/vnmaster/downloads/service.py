@@ -393,8 +393,14 @@ def execute_optional_downloads(
     return OptionalDownloadResult(tuple(completed), tuple(failures))
 
 
+# Mirrors selector._PART_FAMILIES: every label execute_multipart_plan can scope by.
+_PART_LABEL_RE = re.compile(
+    r"(?:part|pt|chapter|ch|episode|ep|volume|vol|book|act|season)\s*[.#-]?\s*\d+", re.I
+)
+
+
 def _optional_scope_root(version_root: Path, part: str | None) -> Path:
-    if part is not None and re.fullmatch(r"part\s*\d+", part.strip(), re.I):
+    if part is not None and _PART_LABEL_RE.fullmatch(part.strip()):
         return version_root / _safe_component(part)
     return version_root
 
