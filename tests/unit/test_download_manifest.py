@@ -649,3 +649,30 @@ def test_addon_uses_its_most_confident_neutral_variant() -> None:
     addons = [artifact for artifact in plan.artifacts if artifact.kind == "addon"]
     assert [artifact.title for artifact in addons] == ["Gallery Unlock"]
     assert addons[0].locator.endswith("unlocker.rpy")
+
+
+def test_link_free_trailing_sections_are_dropped() -> None:
+    base = _thread()
+    thread = replace(
+        base,
+        downloads=(
+            *base.downloads,
+            DownloadGroup("DoverUK25 thanks for the link", ()),
+            DownloadGroup("*Unofficial port, download at your own risk.", ()),
+        ),
+    )
+    sections = build_forum_sections(
+        thread,
+        "Part 6\nMac downloads\nPart 7\nMac downloads\nWALKTHROUGH MOD\n"
+        "DoverUK25 thanks for the link\n*Unofficial port, download at your own risk.",
+        max_groups=10,
+        max_excerpt_chars=1000,
+    )
+    assert [section.name for section in sections] == [
+        "Part 6",
+        "Part 7",
+        "Optional downloads",
+    ]
+    # The dropped headings' text is absorbed by the last surviving section
+    # rather than lost, because it no longer has a next heading to stop at.
+    assert "own risk" in sections[-1].post_excerpt

@@ -218,6 +218,19 @@ def build_forum_sections(
     if not raw_sections and not source_groups:
         raw_sections.append(("General downloads", []))
 
+    # A section holding no links cannot produce artifacts: the constrained
+    # schema caps them at zero for exactly that case. Dropping it saves a model
+    # call, and the preceding section's excerpt then runs on through the dropped
+    # heading's text, so nothing the post said is lost. Keep the unfiltered list
+    # when no section has links at all so a link-free thread still has a shape.
+    linked_sections = [
+        (name, groups)
+        for name, groups in raw_sections
+        if any(group.links for group in groups)
+    ]
+    if linked_sections:
+        raw_sections = linked_sections
+
     names = [name for name, _groups in raw_sections]
     sections = []
     for index, (name, groups) in enumerate(raw_sections):
