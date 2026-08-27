@@ -57,7 +57,11 @@ class ManifestAmbiguity(_StrictModel):
 
 class ManifestVariant(_StrictModel):
     platform: ShortText | None
-    link_ids: list[ShortText] = Field(min_length=1, max_length=64)
+    # An empty list is how an artifact the post names but never links says so.
+    # Only manual delivery may use it; validate_manifest_references enforces
+    # that. Requiring a link id here is what pushed the model into pointing an
+    # unlinked add-on at some other artifact's file.
+    link_ids: list[ShortText] = Field(max_length=64)
     # Use the literal string "unresolved" when the links cannot safely be
     # identified as mirrors of one file.
     mirror_group: ShortText
@@ -815,7 +819,11 @@ def _manual_reason(artifact: ManifestArtifact) -> str:
         text[:200]
         for text in (*artifact.ambiguities, *(n for v in artifact.variants for n in v.notes))
     )[:500]
-    return f"manual download or installation required{': ' + details if details else ''}"
+    if not any(variant.link_ids for variant in artifact.variants):
+        headline = "named in the post, but the thread publishes no download link for it"
+    else:
+        headline = "manual download or installation required"
+    return f"{headline}{': ' + details if details else ''}"
 
 
 def _records_are_direct_documents(records: list[RegisteredLink]) -> bool:

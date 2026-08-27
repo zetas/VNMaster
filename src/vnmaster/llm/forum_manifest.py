@@ -28,7 +28,7 @@ from vnmaster.downloads.models import ThreadInfo
 from vnmaster.llm.structured import StructuredOutputError
 
 
-PROMPT_VERSION = 6
+PROMPT_VERSION = 7
 _ADDON_TITLE_RE = re.compile(
     r"\b(?:walk\s*-?\s*through|mod|patch|hotfix|chart|profile|save|"
     r"translation|\btl\b|compressed|android)\b",
@@ -113,6 +113,12 @@ class ForumManifestInterpreter:
                 schema_name="vnmaster_download_manifest",
             )
             segment = _parse_manifest(raw)
+            dropped_ids = _drop_unlinked_download_variants(segment)
+            if dropped_ids:
+                self._reporter(
+                    "Forum parser: dropped link-less download variants from "
+                    f"{len(dropped_ids)} artifact(s): {', '.join(dropped_ids)}"
+                )
             _drop_unsafe_game_classifications(
                 segment,
                 expected_part_number=game_part_number,
@@ -147,6 +153,12 @@ class ForumManifestInterpreter:
                     schema_name="vnmaster_download_manifest",
                 )
                 manifest = _parse_manifest(raw)
+                dropped_ids = _drop_unlinked_download_variants(manifest)
+                if dropped_ids:
+                    self._reporter(
+                        "Forum parser: dropped link-less download variants from "
+                        f"{len(dropped_ids)} artifact(s): {', '.join(dropped_ids)}"
+                    )
                 validate_manifest_references(
                     manifest,
                     thread_id=thread.thread_id,
@@ -316,6 +328,33 @@ def _drop_unsafe_game_classifications(
     ]
 
 
+def _drop_unlinked_download_variants(manifest: DownloadManifest) -> list[str]:
+    """Contain a model slip instead of failing the whole thread's extraction.
+
+    An empty link list is legitimate for an artifact the post names but never
+    links, which is always manual delivery. On a download artifact it is a
+    mistake, and letting it reach validation would send the entire thread back
+    to the deterministic rules. Drop the variant, and the artifact with it when
+    nothing usable is left. Returns the artifact IDs touched, one entry per
+    artifact regardless of how many of its variants were dropped.
+    """
+    kept = []
+    touched_ids: list[str] = []
+    for artifact in manifest.artifacts:
+        if artifact.delivery == "download":
+            before = len(artifact.variants)
+            artifact.variants = [
+                variant for variant in artifact.variants if variant.link_ids
+            ]
+            if len(artifact.variants) != before:
+                touched_ids.append(artifact.artifact_id)
+            if not artifact.variants:
+                continue
+        kept.append(artifact)
+    manifest.artifacts = kept
+    return touched_ids
+
+
 def _merge_validated_sections(
     thread: ThreadInfo, manifests: list[DownloadManifest]
 ) -> DownloadManifest:
@@ -403,6 +442,11 @@ def _artifact_merge_key(
             for link_id in variant.link_ids
         )
     )
+    if not link_ids:
+        # Two unlinked add-ons in the same part are still distinct artifacts.
+        # Without the title, both would collapse to one merge key and the
+        # second would fold into the first.
+        return ("addon", link_ids, artifact.part_number, artifact.title.casefold())
     return ("addon", link_ids, artifact.part_number)
 
 
@@ -522,6 +566,11 @@ _OUTPUT_RULES = [
         f"below {ADDON_CONFIDENCE_FLOOR:.2f} is left out of the download plan, so score "
         "how sure you are the item should be downloaded as identified, not how well you "
         "understand the post"
+    ),
+    (
+        "an add-on the post names but this section never links is delivery manual, "
+        "install_action manual, with one variant whose link_ids is empty; never borrow a "
+        "link that belongs to a different artifact"
     ),
     "a forum thread, homepage, or instructions page is delivery manual and action manual",
     "mods and patches that copy into a game use merge; documents use separate",
