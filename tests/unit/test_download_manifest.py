@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from pydantic import ValidationError
 
 from vnmaster.downloads.addon_installer import should_install_addon
 from vnmaster.downloads.manifest import (
@@ -174,11 +173,26 @@ def test_manifest_json_schema_requires_every_field_and_forbids_extras() -> None:
         assert set(object_schema["required"]) == set(object_schema["properties"])
 
 
-def test_download_variant_requires_a_link_id() -> None:
-    raw = _manifest().model_dump(mode="json")
-    raw["artifacts"][0]["variants"][0]["link_ids"] = []
-    with pytest.raises(ValidationError):
-        DownloadManifest.model_validate(raw)
+def test_download_artifact_with_no_links_fails_validation() -> None:
+    manifest = _manifest()
+    manifest.artifacts[0].variants[0].link_ids = []
+    with pytest.raises(ValueError, match="has no links"):
+        validate_manifest_references(
+            manifest,
+            thread_id=94140,
+            valid_link_ids={record.link_id for record in build_link_registry(_thread())},
+            require_game=True,
+        )
+
+    # Same empty-link shape, but on a manual add-on: nothing to validate against.
+    manual_addon = _manifest()
+    manual_addon.artifacts[2].variants[0].link_ids = []
+    validate_manifest_references(
+        manual_addon,
+        thread_id=94140,
+        valid_link_ids={record.link_id for record in build_link_registry(_thread())},
+        require_game=True,
+    )
 
 
 def test_sections_split_parts_from_optional_downloads() -> None:
@@ -676,3 +690,55 @@ def test_link_free_trailing_sections_are_dropped() -> None:
     # The dropped headings' text is absorbed by the last surviving section
     # rather than lost, because it no longer has a next heading to stop at.
     assert "own risk" in sections[-1].post_excerpt
+
+
+def _unlinked_addon_manifest() -> DownloadManifest:
+    raw = _two_variant_manifest().model_dump(mode="json")
+    raw["artifacts"].append(
+        {
+            "artifact_id": "walkthrough-mod",
+            "kind": "addon",
+            "title": "Walkthrough Mod",
+            "part_number": None,
+            "part_label": None,
+            "version": None,
+            "required": False,
+            "delivery": "manual",
+            "install_action": "manual",
+            "variants": [
+                {
+                    "platform": None,
+                    "link_ids": [],
+                    "mirror_group": "unresolved",
+                    "confidence": 0.9,
+                    "notes": ["named under Extras but this thread publishes no link"],
+                }
+            ],
+            "confidence": 0.9,
+            "ambiguities": [],
+        }
+    )
+    return DownloadManifest.model_validate(raw)
+
+
+def test_addon_named_without_a_link_is_reported_not_fabricated() -> None:
+    manifest = _unlinked_addon_manifest()
+    validate_manifest_references(
+        manifest,
+        thread_id=71348,
+        valid_link_ids={"g000l000", "g001l000", "g002l000"},
+        require_game=True,
+    )
+    plan = build_download_plan_from_manifest(
+        _two_variant_thread(),
+        manifest,
+        platform_priority=["mac"],
+        preferred_hosts=[],
+        selected_parts=None,
+        include_addons=True,
+    )
+    assert "Walkthrough Mod" not in [artifact.title for artifact in plan.artifacts]
+    reason = next(
+        item.reason for item in plan.skipped if item.title == "Walkthrough Mod"
+    )
+    assert "no download link" in reason

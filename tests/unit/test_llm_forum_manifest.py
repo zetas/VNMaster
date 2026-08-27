@@ -15,7 +15,9 @@ from vnmaster.llm.forum_manifest import (
     ForumManifestInterpreter,
     _OUTPUT_RULES,
     _content_hash,
+    _drop_unlinked_download_variants,
     _drop_unsafe_game_classifications,
+    _merge_validated_sections,
     _schema_for_link_ids,
     _unique_artifact_id,
 )
@@ -43,6 +45,31 @@ def _artifact(link_id: str, part: int = 1) -> dict[str, object]:
             }
         ],
         "confidence": 1.0,
+        "ambiguities": [],
+    }
+
+
+def _unlinked_addon(artifact_id: str, title: str, part: int = 6) -> dict[str, object]:
+    return {
+        "artifact_id": artifact_id,
+        "kind": "addon",
+        "title": title,
+        "part_number": part,
+        "part_label": f"Part {part}",
+        "version": None,
+        "required": False,
+        "delivery": "manual",
+        "install_action": "manual",
+        "variants": [
+            {
+                "platform": None,
+                "link_ids": [],
+                "mirror_group": "unresolved",
+                "confidence": 0.9,
+                "notes": ["named under Extras but this thread publishes no link"],
+            }
+        ],
+        "confidence": 0.9,
         "ambiguities": [],
     }
 
@@ -281,3 +308,78 @@ def test_prompt_version_changes_the_content_hash(monkeypatch: pytest.MonkeyPatch
 
     bumped = _content_hash(thread, "", settings)
     assert baseline != bumped
+
+
+def test_download_artifact_with_no_links_is_dropped_not_fatal() -> None:
+    empty = _artifact("g001l000", part=6)
+    empty["variants"][0]["link_ids"] = []
+    manifest = DownloadManifest.model_validate(
+        _manifest(_artifact("g001l001", part=7), {**empty, "artifact_id": "hollow"})
+    )
+    dropped = _drop_unlinked_download_variants(manifest)
+    assert [artifact.artifact_id for artifact in manifest.artifacts] == ["part-7"]
+    assert dropped == ["hollow"]
+
+
+def test_sanitizer_leaves_manual_unlinked_addons_alone() -> None:
+    manifest = DownloadManifest.model_validate(
+        _manifest(_unlinked_addon("walkthrough-mod", "Walkthrough Mod"))
+    )
+    dropped = _drop_unlinked_download_variants(manifest)
+    assert dropped == []
+    assert [artifact.artifact_id for artifact in manifest.artifacts] == [
+        "walkthrough-mod"
+    ]
+
+
+def test_deterministic_merge_keeps_distinct_unlinked_addons() -> None:
+    thread = ThreadInfo(10, "Story", None, None, "https://f95zone.to/threads/.10/", ())
+    first = DownloadManifest.model_validate(
+        _manifest(_unlinked_addon("walkthrough-mod", "Walkthrough Mod"))
+    )
+    second = DownloadManifest.model_validate(
+        _manifest(_unlinked_addon("walkthrough-mod", "Italian Translation"))
+    )
+
+    merged = _merge_validated_sections(thread, [first, second])
+
+    assert [artifact.title for artifact in merged.artifacts] == [
+        "Walkthrough Mod",
+        "Italian Translation",
+    ]
+
+
+def test_interpreter_reports_dropped_unlinked_variants(tmp_path: Path) -> None:
+    thread = ThreadInfo(
+        10,
+        "Story",
+        "v1",
+        1,
+        "https://f95zone.to/threads/.10/",
+        (DownloadGroup("Mac", (DownloadMirror("MEGA", "https://mega.nz/file/a"),)),),
+    )
+    hollow = _artifact("g001l000", part=2)
+    hollow["artifact_id"] = "hollow"
+    hollow["kind"] = "addon"
+    hollow["required"] = False
+    hollow["install_action"] = "separate"
+    hollow["variants"][0]["link_ids"] = []
+    generator = FakeGenerator([_manifest(_artifact("g000l000"), hollow)])
+    messages: list[str] = []
+    parser = ForumManifestInterpreter(
+        generator,
+        ForumParserConfig(enabled=True),
+        _engine(tmp_path),
+        clock=lambda: 123,
+        reporter=messages.append,
+    )
+
+    result = parser.interpret(thread, "Downloads\nMac")
+
+    assert [artifact.artifact_id for artifact in result.manifest.artifacts] == [
+        "part-1"
+    ]
+    assert any(
+        "dropped link-less download variants from 1 artifact(s)" in message
+        for message in messages
+    )
