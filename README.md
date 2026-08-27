@@ -287,6 +287,8 @@ The feature is disabled by default. Enable one provider in
 enabled = true
 provider = "openai"
 model = "gpt-5.6-sol"
+# none, low, medium, high, xhigh or max; which ones a model accepts varies by model.
+# "none" sends no reasoning block at all, which is what non-reasoning models need.
 reasoning_effort = "medium"
 ```
 

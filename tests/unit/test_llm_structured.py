@@ -169,3 +169,20 @@ def test_http_error_includes_safe_provider_diagnostic() -> None:
             schema={"type": "object", "additionalProperties": False},
             schema_name="manifest",
         )
+
+
+def test_openai_omits_reasoning_block_when_effort_is_none() -> None:
+    _, body, _ = _call(
+        ForumParserConfig(
+            enabled=True, provider="openai", model="gpt-test", reasoning_effort="none"
+        ),
+        {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": '{"ok": true}'}],
+                }
+            ]
+        },
+    )
+    assert "reasoning" not in body

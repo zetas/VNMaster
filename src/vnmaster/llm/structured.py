@@ -85,7 +85,13 @@ class StructuredOutputClient:
                 "instructions": system_prompt,
                 "input": user_prompt,
                 "max_output_tokens": self.settings.max_output_tokens,
-                "reasoning": {"effort": self.settings.reasoning_effort},
+                # "none" means send no reasoning block; non-reasoning models
+                # reject the field outright.
+                **(
+                    {"reasoning": {"effort": self.settings.reasoning_effort}}
+                    if self.settings.reasoning_effort != "none"
+                    else {}
+                ),
                 "store": False,
                 "text": {
                     "format": {
