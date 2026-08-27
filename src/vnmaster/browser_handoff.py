@@ -80,22 +80,23 @@ def _query_history_snapshot(
             if source.is_file():
                 shutil.copy2(source, snapshot.with_name(snapshot.name + suffix))
 
-        patterns = tuple(f"https://{host}/%" for host in hosts)
-        # One placeholder per host; the clause text is constant, only values bind.
-        placeholders = " OR ".join(["p.url LIKE ?"] * len(patterns))
-        query = f"""
+        # One static query per host keeps the SQL constant whatever the host count.
+        query = """
             SELECT p.url, MAX(v.visit_date) AS latest_visit
             FROM moz_places AS p
             JOIN moz_historyvisits AS v ON v.place_id = p.id
-            WHERE v.visit_date >= ?
-              AND ({placeholders})
+            WHERE v.visit_date >= ? AND p.url LIKE ?
             GROUP BY p.url
             ORDER BY latest_visit DESC
             LIMIT 20
         """
+        latest: dict[str, int] = {}
         with sqlite3.connect(snapshot) as connection:
-            rows = connection.execute(query, (since_us, *patterns)).fetchall()
-    return tuple(str(row[0]) for row in rows if isinstance(row[0], str))
+            for host in hosts:
+                for url, visited in connection.execute(query, (since_us, f"https://{host}/%")):
+                    if isinstance(url, str) and isinstance(visited, int):
+                        latest[url] = max(latest.get(url, 0), visited)
+    return tuple(sorted(latest, key=lambda url: latest[url], reverse=True)[:20])
 
 
 def _zen_places_path(*, zen_root: Path | None = None) -> Path | None:
