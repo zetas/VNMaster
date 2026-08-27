@@ -45,6 +45,9 @@ def is_url_for_host(host: str, url: str) -> bool:
         return is_mega_url(url)
     if "pixeldrain" in normalized:
         return is_pixeldrain_url(url)
+    if "proton" in normalized:
+        # Checked before the drive fallthrough: "drive" also matches PROTONDRIVE.
+        return (parsed.hostname or "").casefold() == "drive.proton.me" and is_safe_https_url(url)
     if "google" in normalized or "drive" in normalized:
         return is_google_drive_url(url)
     if "gofile" in normalized or "mixdrop" in normalized:

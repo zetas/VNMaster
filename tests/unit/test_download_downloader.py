@@ -86,3 +86,10 @@ def test_mixed_gallery_container_downloads_only_adjudicated_payload(
 
     assert selected == [(candidates[0],)]
     assert [path.name for path in downloaded] == ["A Game-1.2-mac.zip"]
+
+
+def test_proton_drive_is_not_mistaken_for_google_drive() -> None:
+    assert is_url_for_host("PROTONDRIVE", "https://drive.proton.me/urls/AB12#key")
+    assert not is_url_for_host("PROTONDRIVE", "https://drive.google.com/file/d/x/view")
+    assert not is_url_for_host("PROTONDRIVE", "http://drive.proton.me/urls/AB12")
+    assert is_url_for_host("GDRIVE", "https://drive.google.com/file/d/x/view")
