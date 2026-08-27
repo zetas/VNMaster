@@ -742,3 +742,29 @@ def test_addon_named_without_a_link_is_reported_not_fabricated() -> None:
         item.reason for item in plan.skipped if item.title == "Walkthrough Mod"
     )
     assert "no download link" in reason
+
+
+def test_leading_link_free_section_is_dropped_without_moving_later_excerpts() -> None:
+    # A dropped section that has nothing before it cannot hand its text to a
+    # predecessor, so that text leaves the payload entirely. That is acceptable:
+    # a section with no links gets artifacts.maxItems = 0 in the constrained
+    # schema, so the text could only ever have reached a call that was forbidden
+    # from returning anything. The surviving sections keep their own excerpts.
+    base = _thread()
+    thread = replace(
+        base,
+        downloads=(DownloadGroup("READ THIS FIRST", ()), *base.downloads),
+    )
+    sections = build_forum_sections(
+        thread,
+        "READ THIS FIRST\nyou need the base game\nPart 6\nMac downloads\n"
+        "Part 7\nMac downloads\nWALKTHROUGH MOD",
+        max_groups=10,
+        max_excerpt_chars=1000,
+    )
+    assert [section.name for section in sections] == [
+        "Part 6",
+        "Part 7",
+        "Optional downloads",
+    ]
+    assert sections[0].post_excerpt.startswith("Part 6")
