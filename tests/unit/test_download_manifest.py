@@ -535,3 +535,117 @@ def test_part_detection_comes_from_manifest_not_group_regexes() -> None:
         (6, "Part 6"),
         (7, "Part 7"),
     ]
+
+
+def _two_variant_thread() -> ThreadInfo:
+    return ThreadInfo(
+        thread_id=71348,
+        title="The Coven",
+        version="v0.10.1",
+        thread_type=1,
+        url="https://f95zone.to/threads/.71348/",
+        downloads=(
+            DownloadGroup(
+                "Mac", (DownloadMirror("MEGA", "https://mega.nz/file/coven"),)
+            ),
+            DownloadGroup(
+                "Gallery Unlock — H3PRm6a.png",
+                (
+                    DownloadMirror(
+                        "F95 ATTACHMENT",
+                        "https://attachments.f95zone.to/2022/09/2041872_H3PRm6a.png",
+                    ),
+                ),
+            ),
+            DownloadGroup(
+                "Gallery Unlock — unlocker.rpy",
+                (
+                    DownloadMirror(
+                        "F95 ATTACHMENT",
+                        "https://attachments.f95zone.to/2022/05/1820744_unlocker.rpy",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def _two_variant_manifest() -> DownloadManifest:
+    return DownloadManifest.model_validate(
+        {
+            "schema_version": 1,
+            "thread_id": 71348,
+            "title": "The Coven",
+            "multipart": False,
+            "artifacts": [
+                {
+                    "artifact_id": "the-coven",
+                    "kind": "game",
+                    "title": "The Coven",
+                    "part_number": None,
+                    "part_label": None,
+                    "version": "v0.10.1",
+                    "required": True,
+                    "delivery": "download",
+                    "install_action": "game",
+                    "variants": [
+                        {
+                            "platform": "mac",
+                            "link_ids": ["g000l000"],
+                            "mirror_group": "the-coven-mac",
+                            "confidence": 0.99,
+                            "notes": [],
+                        }
+                    ],
+                    "confidence": 0.98,
+                    "ambiguities": [],
+                },
+                {
+                    "artifact_id": "gallery-unlock",
+                    "kind": "addon",
+                    "title": "Gallery Unlock",
+                    "part_number": None,
+                    "part_label": None,
+                    "version": None,
+                    "required": False,
+                    "delivery": "download",
+                    "install_action": "merge",
+                    "variants": [
+                        {
+                            "platform": None,
+                            "link_ids": ["g001l000"],
+                            "mirror_group": "unresolved",
+                            "confidence": 0.45,
+                            "notes": ["the PNG's role is unclear"],
+                        },
+                        {
+                            "platform": None,
+                            "link_ids": ["g002l000"],
+                            "mirror_group": "unresolved",
+                            "confidence": 0.9,
+                            "notes": ["the RPY is likely the functional unlocker"],
+                        },
+                    ],
+                    "confidence": 0.72,
+                    "ambiguities": [],
+                },
+            ],
+            "ambiguities": [],
+            "warnings": [],
+            "confidence": 0.9,
+        }
+    )
+
+
+def test_addon_uses_its_most_confident_neutral_variant() -> None:
+    plan = build_download_plan_from_manifest(
+        _two_variant_thread(),
+        _two_variant_manifest(),
+        platform_priority=["mac"],
+        preferred_hosts=[],
+        selected_parts=None,
+        include_addons=True,
+    )
+    addons = [artifact for artifact in plan.artifacts if artifact.kind == "addon"]
+    assert [artifact.title for artifact in addons] == ["Gallery Unlock"]
+    assert addons[0].locator.endswith("unlocker.rpy")

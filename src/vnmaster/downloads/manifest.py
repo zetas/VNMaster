@@ -720,14 +720,30 @@ def _choose_variant(
     if not artifact.variants:
         return None
     for wanted in platform_priority:
-        for variant in artifact.variants:
-            if _platform_matches(variant.platform, wanted):
-                return variant
-    neutral = next(
-        (variant for variant in artifact.variants if variant.platform is None),
-        None,
-    )
-    return neutral or (artifact.variants[0] if artifact.kind == "addon" else None)
+        matching = [
+            variant
+            for variant in artifact.variants
+            if _platform_matches(variant.platform, wanted)
+        ]
+        if matching:
+            return _most_confident(matching)
+    neutral = [variant for variant in artifact.variants if variant.platform is None]
+    if neutral:
+        return _most_confident(neutral)
+    if artifact.kind == "addon":
+        return _most_confident(list(artifact.variants))
+    return None
+
+
+def _most_confident(variants: list[ManifestVariant]) -> ManifestVariant:
+    """Pick the best-evidenced variant so one weak reading cannot sink an add-on.
+
+    A low-confidence variant is dropped by the 0.70 gate in the caller. Taking
+    the first listed variant let an unplaceable extra file discard the whole
+    add-on even when a confident variant named the real payload. Ties keep the
+    manifest's own order.
+    """
+    return max(variants, key=lambda variant: variant.confidence)
 
 
 def _platform_matches(actual: str | None, wanted: str) -> bool:
